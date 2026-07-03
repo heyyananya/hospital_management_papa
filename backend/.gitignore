@@ -1,0 +1,7 @@
+node_modules
+.env
+src/uploads/reports/*
+!src/uploads/reports/.gitkeep
+src/uploads/letterpad/*
+!src/uploads/letterpad/.gitkeep
+*.log

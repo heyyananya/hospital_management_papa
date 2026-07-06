@@ -14,6 +14,53 @@ const HttpError = require('../utils/HttpError');
 
 const AUTO_TYPE  = 'AUTO';
 const FINAL_TYPE = 'FINAL';
+const IPD_TYPE   = 'IPD';
+
+// One-shot idempotent migration so existing installs pick up the IPD-bill
+// columns and CHECK constraint without needing `npm run init`. Each step is
+// wrapped individually — DROP NOT NULL / DROP CONSTRAINT will no-op if the
+// state is already correct, but the wrapper stops one non-fatal hiccup from
+// blocking the whole boot.
+let ipdBillsMigrated = false;
+const ensureIpdBillsMigration = async () => {
+  if (ipdBillsMigrated) return;
+  const safe = async (sql) => {
+    try { await pool.query(sql); }
+    catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[bills migration]', e.message, '::', sql.replace(/\s+/g, ' ').trim());
+    }
+  };
+  // 1. Column first — no FK yet, so it works even if admissions is missing.
+  await safe(`ALTER TABLE bills ADD COLUMN IF NOT EXISTS admission_id INTEGER`);
+  // 2. FK — only if the constraint isn't there yet (needs admissions to exist).
+  await safe(`
+    DO $mig$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'bills_admission_id_fkey'
+      ) AND EXISTS (
+        SELECT 1 FROM information_schema.tables
+         WHERE table_name = 'admissions'
+      ) THEN
+        ALTER TABLE bills
+          ADD CONSTRAINT bills_admission_id_fkey
+          FOREIGN KEY (admission_id) REFERENCES admissions(id) ON DELETE CASCADE;
+      END IF;
+    END
+    $mig$;
+  `);
+  // 3. Relax visit_id NOT NULL (IPD bills don't have a visit).
+  await safe(`ALTER TABLE bills ALTER COLUMN visit_id DROP NOT NULL`);
+  // 4. Broaden bill_type CHECK to allow IPD.
+  await safe(`ALTER TABLE bills DROP CONSTRAINT IF EXISTS bills_bill_type_check`);
+  await safe(`ALTER TABLE bills
+              ADD CONSTRAINT bills_bill_type_check
+              CHECK (bill_type IN ('AUTO','FINAL','IPD'))`);
+  // 5. Index.
+  await safe(`CREATE INDEX IF NOT EXISTS idx_bills_admission ON bills (admission_id)`);
+  ipdBillsMigrated = true;
+};
 
 /* ----------------------------- helpers ----------------------------- */
 
@@ -28,8 +75,19 @@ const FINAL_TYPE = 'FINAL';
  */
 const { currentFY } = require('../utils/financialYear');
 
-const nextBillNumber = async (client, isFinal) => {
-  const prefix = isFinal ? 'FBILL' : 'BILL';
+const prefixFor = (type) => {
+  if (type === FINAL_TYPE) return 'FBILL';
+  if (type === IPD_TYPE)   return 'IBILL';
+  return 'BILL';
+};
+
+const nextBillNumber = async (client, typeOrIsFinal) => {
+  // Back-compat: original signature was (client, isFinal) where isFinal is a
+  // boolean. Accept a string type too so IPD callers can pass 'IPD'.
+  const type = typeof typeOrIsFinal === 'string'
+    ? typeOrIsFinal
+    : (typeOrIsFinal ? FINAL_TYPE : AUTO_TYPE);
+  const prefix = prefixFor(type);
   const fy = currentFY();
   const like = `${prefix}-${fy.key}-%`;
   const { rows } = await client.query(
@@ -56,6 +114,7 @@ const recalcTotals = (services, discount = 0, additional = 0) => {
 const BILL_SELECT = `
   b.id, b.bill_number AS "billNumber", b.bill_type AS "billType",
   b.parent_bill_id AS "parentBillId", b.visit_id AS "visitId",
+  b.admission_id AS "admissionId",
   b.patient_id AS "patientId", b.doctor_id AS "doctorId",
   b.case_type AS "caseType", b.status,
   b.subtotal, b.discount, b.additional, b.total,
@@ -63,11 +122,27 @@ const BILL_SELECT = `
   b.created_at AS "createdAt", b.updated_at AS "updatedAt"
 `;
 
+// IPD bills have no visit — case_number / visit_date fall back to admission
+// number / admitted-at so downstream consumers (list UI, PDF receipt) can
+// treat every bill row uniformly.
 const VISIT_JOIN_SELECT = `
   p.patient_code AS "patientCode",
   (p.first_name || ' ' || COALESCE(p.middle_name || ' ', '') || p.surname) AS "patientName",
   p.mobile, p.gender, p.age, p.village_name AS "village",
-  v.case_number AS "caseNumber", v.visit_date AS "visitDate", v.visit_time AS "visitTime",
+  COALESCE(v.case_number::text,
+           CASE WHEN a.id IS NOT NULL
+                THEN a.fy_key || '/' || a.admission_number::text
+                ELSE NULL END)                           AS "caseNumber",
+  COALESCE(v.visit_date, a.admitted_at::date)            AS "visitDate",
+  COALESCE(TO_CHAR(v.visit_time, 'HH24:MI'),
+           TO_CHAR(a.admitted_at, 'HH24:MI'))              AS "visitTime",
+  a.admission_number                                     AS "admissionNumber",
+  a.fy_key                                               AS "admissionFyKey",
+  a.admitted_at                                          AS "admittedAt",
+  a.discharged_at                                        AS "dischargedAt",
+  a.admission_diagnosis                                  AS "admissionDiagnosis",
+  aw.name                                                AS "wardName",
+  ab.bed_number                                          AS "bedNumber",
   u.full_name AS "createdByName"
 `;
 
@@ -129,6 +204,7 @@ const createAutoBillTx = async (client, { visitId, patientId, caseType, userId, 
 /* ------------------------------ Queries ---------------------------- */
 
 const listBills = async ({ billType, q, fromDate, toDate, page = 1, pageSize = 25 }) => {
+  await ensureIpdBillsMigration();
   const params = [];
   const where = [];
 
@@ -156,9 +232,12 @@ const listBills = async ({ billType, q, fromDate, toDate, page = 1, pageSize = 2
 
   const baseFrom = `
     FROM bills b
-    JOIN patients p       ON p.id = b.patient_id
-    JOIN patient_visits v ON v.id = b.visit_id
-    LEFT JOIN users u     ON u.id = b.created_by
+    JOIN patients p            ON p.id = b.patient_id
+    LEFT JOIN patient_visits v ON v.id = b.visit_id
+    LEFT JOIN admissions a     ON a.id = b.admission_id
+    LEFT JOIN beds ab          ON ab.id = a.bed_id
+    LEFT JOIN wards aw         ON aw.id = ab.ward_id
+    LEFT JOIN users u          ON u.id = b.created_by
    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
   `;
 
@@ -181,12 +260,16 @@ const listBills = async ({ billType, q, fromDate, toDate, page = 1, pageSize = 2
 };
 
 const getBill = async (id) => {
+  await ensureIpdBillsMigration();
   const { rows } = await pool.query(
     `SELECT ${BILL_SELECT}, ${VISIT_JOIN_SELECT}
        FROM bills b
-       JOIN patients p       ON p.id = b.patient_id
-       JOIN patient_visits v ON v.id = b.visit_id
-       LEFT JOIN users u     ON u.id = b.created_by
+       JOIN patients p            ON p.id = b.patient_id
+       LEFT JOIN patient_visits v ON v.id = b.visit_id
+       LEFT JOIN admissions a     ON a.id = b.admission_id
+       LEFT JOIN beds ab          ON ab.id = a.bed_id
+       LEFT JOIN wards aw         ON aw.id = ab.ward_id
+       LEFT JOIN users u          ON u.id = b.created_by
       WHERE b.id = $1`,
     [id]
   );
@@ -316,9 +399,53 @@ const markPrinted = async (billId) => {
   );
 };
 
+/* --------------------------- IPD bill flow -------------------------- */
+
+/**
+ * Create an EMPTY IPD bill for an admission. Reception fills in services,
+ * charges and totals from the bill detail page (same edit UI as Final).
+ *
+ * If an ACTIVE IPD bill already exists for the admission, return it as-is
+ * instead of duplicating — the reception should just re-open the same bill.
+ */
+const createIpdBillForAdmission = async (admissionId, user) => {
+  await ensureIpdBillsMigration();
+  return withTx(async (client) => {
+    const { rows: aRows } = await client.query(
+      `SELECT id, patient_id, admitting_doctor_id, status
+         FROM admissions WHERE id = $1 FOR UPDATE`, [admissionId]
+    );
+    const adm = aRows[0];
+    if (!adm) throw new HttpError(404, 'Admission not found');
+
+    // Re-use any ACTIVE IPD bill so reception doesn't get duplicates from
+    // repeated clicks on "Make a Bill".
+    const { rows: exist } = await client.query(
+      `SELECT id, bill_number FROM bills
+        WHERE admission_id = $1 AND bill_type = 'IPD' AND status = 'ACTIVE'
+        ORDER BY id ASC LIMIT 1`,
+      [admissionId]
+    );
+    if (exist[0]) return { id: exist[0].id, billNumber: exist[0].bill_number };
+
+    const billNumber = await nextBillNumber(client, IPD_TYPE);
+    const { rows: bRows } = await client.query(
+      `INSERT INTO bills (
+         bill_number, bill_type, admission_id, patient_id, doctor_id,
+         status, subtotal, discount, additional, total, created_by
+       ) VALUES ($1, 'IPD', $2, $3, $4, 'ACTIVE', 0, 0, 0, 0, $5)
+       RETURNING id`,
+      [billNumber, adm.id, adm.patient_id, adm.admitting_doctor_id || null, user.id]
+    );
+    return { id: bRows[0].id, billNumber };
+  });
+};
+
 module.exports = {
-  AUTO_TYPE, FINAL_TYPE,
+  AUTO_TYPE, FINAL_TYPE, IPD_TYPE,
   createAutoBillTx,
   listBills, getBill, getByVisitAndType,
   convertToFinal, updateFinal, lockFinal, markPrinted,
+  createIpdBillForAdmission,
+  ensureIpdBillsMigration,
 };

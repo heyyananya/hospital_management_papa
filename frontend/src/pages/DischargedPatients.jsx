@@ -18,11 +18,12 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import AssignmentIcon from '@mui/icons-material/Assignment';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import { DatePicker } from '@mui/x-date-pickers';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
-import { ipdApi } from '../services/endpoints.js';
+import { ipdApi, billsApi } from '../services/endpoints.js';
 import { useSnackbar } from '../context/SnackbarContext.jsx';
 
 const fmtDT = (d) => (d ? dayjs(d).format('DD/MM/YY HH:mm') : '—');
@@ -42,8 +43,21 @@ export default function DischargedPatients() {
   const [fromDate, setFromDate] = useState(dayjs().subtract(30, 'day').startOf('day'));
   const [toDate, setToDate] = useState(dayjs().endOf('day'));
   const [detail, setDetail] = useState(null);
+  const [billing, setBilling] = useState(null); // admission id currently being billed
   const { notify } = useSnackbar();
   const navigate = useNavigate();
+
+  const makeBill = async (admission) => {
+    setBilling(admission.id);
+    try {
+      const b = await billsApi.createIpdFromAdmission(admission.id);
+      navigate(`/bills/${b.id}`);
+    } catch (e) {
+      notify(e?.response?.data?.message || 'Could not create IPD bill', 'error');
+    } finally {
+      setBilling(null);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -178,6 +192,11 @@ export default function DischargedPatients() {
                         <IconButton size="small" title="Indoor sheet"
                           onClick={() => navigate(`/ipd/admissions/${r.id}/indoor-sheet`)}>
                           <AssignmentIcon fontSize="small" />
+                        </IconButton>
+                        <IconButton size="small" title="Make a Bill" color="primary"
+                          disabled={billing === r.id}
+                          onClick={() => makeBill(r)}>
+                          <ReceiptLongIcon fontSize="small" />
                         </IconButton>
                         <IconButton size="small" title="Details" onClick={() => setDetail(r)}>
                           <InfoOutlinedIcon fontSize="small" />

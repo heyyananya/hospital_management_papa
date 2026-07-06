@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Box, Card, CardContent, Grid, TextField, Button, Table, TableHead, TableRow,
   TableCell, TableBody, TableContainer, Chip, Typography, CircularProgress,
-  TablePagination, Stack,
+  TablePagination, Stack, Tabs, Tab,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -18,6 +18,44 @@ import { currentFY } from '../utils/financialYear.js';
 const money = (n) => `Rs. ${Number(n || 0).toFixed(2)}`;
 
 export default function AutoBills() {
+  const [tab, setTab] = useState('OPD');
+
+  return (
+    <Box>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+        <Box>
+          <Typography variant="h5">
+            Auto Generated Bills — {tab === 'OPD' ? 'OPD Bills' : 'IPD Bills'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {tab === 'OPD'
+              ? <>Standard <b>OPD bill</b> (New Case ₹400 / Old Case ₹200) — generated automatically at every visit.
+                  If a patient asks for a custom amount, open the bill and click <b>Edit</b> to change the price.</>
+              : <><b>IPD bills</b> for indoor patients. Create one from <b>IPD Patients</b> or <b>Discharged Patients</b>
+                  by clicking <b>Make a Bill</b>, then add the services and charges manually.</>}
+          </Typography>
+        </Box>
+      </Stack>
+
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
+      >
+        <Tab value="OPD" label="OPD Bills" />
+        <Tab value="IPD" label="IPD Bills" />
+      </Tabs>
+
+      {/* Mount-once-per-tab so filter state and page position reset when the
+          reception switches views. */}
+      {tab === 'OPD' && <BillListPanel key="opd" kind="OPD" />}
+      {tab === 'IPD' && <BillListPanel key="ipd" kind="IPD" />}
+    </Box>
+  );
+}
+
+function BillListPanel({ kind }) {
+  const isIpd = kind === 'IPD';
   const fy = currentFY();
   const [filters, setFilters] = useState({ q: '', fromDate: fy.start, toDate: dayjs().endOf('day') });
   const [data, setData] = useState({ rows: [], total: 0, page: 1, pageSize: 25 });
@@ -31,7 +69,7 @@ export default function AutoBills() {
       if (filters.q) params.q = filters.q;
       if (filters.fromDate) params.fromDate = dayjs(filters.fromDate).format('YYYY-MM-DD');
       if (filters.toDate)   params.toDate   = dayjs(filters.toDate).format('YYYY-MM-DD');
-      const r = await billsApi.listAuto(params);
+      const r = isIpd ? await billsApi.listIpd(params) : await billsApi.listAuto(params);
       setData(r);
     } catch (e) {
       notify(e?.response?.data?.message || 'Failed to load', 'error');
@@ -43,23 +81,15 @@ export default function AutoBills() {
   useEffect(() => { load(1, data.pageSize); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <Box>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-        <Box>
-          <Typography variant="h5">Auto Generated Bills</Typography>
-          <Typography variant="body2" color="text.secondary">
-            Standard patient bill (New Case ₹400 / Old Case ₹200) — generated automatically at every visit.
-            If a patient asks for a custom amount, open the bill and click <b>Edit</b> to change the price.
-          </Typography>
-        </Box>
-      </Stack>
-
+    <>
       <Card sx={{ mb: 2 }}>
         <CardContent>
           <Grid container spacing={2} alignItems="center">
             <Grid item xs={12} sm={5}>
               <TextField
-                label="Search (bill #, patient name, mobile, UHID)"
+                label={isIpd
+                  ? 'Search (bill #, patient name, mobile, UHID)'
+                  : 'Search (bill #, patient name, mobile, UHID)'}
                 fullWidth
                 value={filters.q}
                 onChange={(e) => setFilters({ ...filters, q: e.target.value })}
@@ -102,7 +132,7 @@ export default function AutoBills() {
                     <TableCell>Patient</TableCell>
                     <TableCell>UHID</TableCell>
                     <TableCell>Mobile</TableCell>
-                    <TableCell>Case</TableCell>
+                    <TableCell>{isIpd ? 'Adm #' : 'Case'}</TableCell>
                     <TableCell align="right">Total</TableCell>
                     <TableCell>Date</TableCell>
                     <TableCell align="right">Actions</TableCell>
@@ -112,20 +142,31 @@ export default function AutoBills() {
                   {data.rows.length === 0 && (
                     <TableRow>
                       <TableCell colSpan={8}>
-                        <Typography color="text.secondary">No bills found.</Typography>
+                        <Typography color="text.secondary">
+                          {isIpd
+                            ? 'No IPD bills yet. Click Make a Bill on an admitted or discharged patient to create one.'
+                            : 'No bills found.'}
+                        </Typography>
                       </TableCell>
                     </TableRow>
                   )}
                   {data.rows.map((b) => (
                     <TableRow key={b.id} hover>
-                      <TableCell><Chip size="small" label={b.billNumber} color="primary" variant="outlined" /></TableCell>
+                      <TableCell><Chip size="small" label={b.billNumber} color={isIpd ? 'warning' : 'primary'} variant="outlined" /></TableCell>
                       <TableCell>{b.patientName}</TableCell>
                       <TableCell>{b.patientCode}</TableCell>
                       <TableCell>{b.mobile}</TableCell>
                       <TableCell>
-                        <Chip size="small"
-                          color={b.caseType === 'NEW' ? 'primary' : 'default'}
-                          label={b.caseType === 'NEW' ? 'New' : 'Old'} />
+                        {isIpd ? (
+                          b.admissionFyKey
+                            ? <Chip size="small" color="warning" variant="outlined"
+                                    label={`${b.admissionFyKey}/${b.admissionNumber}`} />
+                            : '—'
+                        ) : (
+                          <Chip size="small"
+                            color={b.caseType === 'NEW' ? 'primary' : 'default'}
+                            label={b.caseType === 'NEW' ? 'New' : 'Old'} />
+                        )}
                       </TableCell>
                       <TableCell align="right" sx={{ fontWeight: 600 }}>{money(b.total)}</TableCell>
                       <TableCell>{new Date(b.createdAt).toLocaleString('en-IN')}</TableCell>
@@ -157,6 +198,6 @@ export default function AutoBills() {
           )}
         </CardContent>
       </Card>
-    </Box>
+    </>
   );
 }

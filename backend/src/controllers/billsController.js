@@ -12,6 +12,21 @@ exports.listFinal = asyncHandler(async (req, res) => {
   res.json(out);
 });
 
+exports.listIpd = asyncHandler(async (req, res) => {
+  const out = await billsService.listBills({ ...req.query, billType: 'IPD' });
+  res.json(out);
+});
+
+exports.createIpd = asyncHandler(async (req, res) => {
+  const admissionId = Number(req.params.admissionId);
+  const out = await billsService.createIpdBillForAdmission(admissionId, req.user);
+  audit({
+    userId: req.user.id, action: 'CREATE_IPD_BILL', entity: 'bills',
+    entityId: out.id, meta: { admissionId }, ip: req.ip,
+  });
+  res.status(201).json(out);
+});
+
 exports.get = asyncHandler(async (req, res) => {
   const bill = await billsService.getBill(req.params.id);
   res.json(bill);

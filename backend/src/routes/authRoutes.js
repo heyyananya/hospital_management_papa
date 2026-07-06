@@ -15,5 +15,7 @@ const loginLimiter = rateLimit({
 router.post('/login', loginLimiter, controller.login);
 router.get('/me', auth, controller.me);
 router.post('/logout', auth, controller.logout);
+// Same rate limit as login — this is a brute-force target too.
+router.post('/verify', loginLimiter, auth, controller.verifyPassword);
 
 module.exports = router;

@@ -22,3 +22,18 @@ exports.logout = asyncHandler(async (req, res) => {
   audit({ userId: req.user.id, action: 'LOGOUT', entity: 'users', entityId: req.user.id, ip: req.ip });
   return res.json({ ok: true });
 });
+
+/**
+ * Re-verify the caller's own password. The `context` field is a short label
+ * (e.g. "reveal-user-password") that gets audit-logged so admins can trace
+ * why sensitive re-auths happened.
+ */
+exports.verifyPassword = asyncHandler(async (req, res) => {
+  const { password, context } = req.body || {};
+  const out = await authService.verifyPassword(req.user.id, password);
+  audit({
+    userId: req.user.id, action: 'VERIFY_PASSWORD', entity: 'users',
+    entityId: req.user.id, ip: req.ip, meta: { context: context || null },
+  });
+  return res.json(out);
+});

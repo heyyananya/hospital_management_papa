@@ -29,9 +29,20 @@ CREATE TABLE IF NOT EXISTS users (
   full_name       VARCHAR(120) NOT NULL,
   role            user_role    NOT NULL,
   is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
+  -- NULL = "use the role defaults". Explicit array = the admin has customised
+  -- this user's rights (see utils/permissions on the frontend for the catalog).
+  -- Admin accounts always effectively get every permission — this column is
+  -- consulted for RECEPTIONIST / MEDICAL_OFFICER only.
+  permissions     JSONB,
   created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 );
+-- Additive migration for older installs that predate the permissions column.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions JSONB;
+-- Plaintext copy of the password so admins can look it up from the Users
+-- page. Populated on create + every reset; NULL for legacy accounts whose
+-- password was never touched after upgrade.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_plain TEXT;
 
 -- ---------------------------------------------------------------------
 -- MASTER TABLES
@@ -354,10 +365,11 @@ CREATE INDEX IF NOT EXISTS idx_visit_charges_visit ON visit_charges (visit_id);
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS bills (
   id              SERIAL PRIMARY KEY,
-  bill_number     VARCHAR(40) UNIQUE NOT NULL,         -- BILL-2026-000001 / FBILL-2026-000001
-  bill_type       VARCHAR(10) NOT NULL CHECK (bill_type IN ('AUTO', 'FINAL')),
+  bill_number     VARCHAR(40) UNIQUE NOT NULL,         -- BILL-2026-000001 / FBILL-2026-000001 / IBILL-2026-000001
+  bill_type       VARCHAR(10) NOT NULL CHECK (bill_type IN ('AUTO', 'FINAL', 'IPD')),
   parent_bill_id  INTEGER REFERENCES bills(id) ON DELETE SET NULL,
-  visit_id        INTEGER NOT NULL REFERENCES patient_visits(id) ON DELETE CASCADE,
+  visit_id        INTEGER REFERENCES patient_visits(id) ON DELETE CASCADE,      -- required for AUTO/FINAL, NULL for IPD
+  admission_id    INTEGER,                                                       -- set for IPD bills only; FK added after admissions table exists
   patient_id      INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   doctor_id       INTEGER REFERENCES users(id),
   case_type       VARCHAR(10),                          -- NEW / OLD (snapshot from visit)
@@ -373,10 +385,11 @@ CREATE TABLE IF NOT EXISTS bills (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_bills_visit    ON bills (visit_id);
-CREATE INDEX IF NOT EXISTS idx_bills_patient  ON bills (patient_id);
-CREATE INDEX IF NOT EXISTS idx_bills_type     ON bills (bill_type);
-CREATE INDEX IF NOT EXISTS idx_bills_date     ON bills (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_bills_visit     ON bills (visit_id);
+CREATE INDEX IF NOT EXISTS idx_bills_admission ON bills (admission_id);
+CREATE INDEX IF NOT EXISTS idx_bills_patient   ON bills (patient_id);
+CREATE INDEX IF NOT EXISTS idx_bills_type      ON bills (bill_type);
+CREATE INDEX IF NOT EXISTS idx_bills_date      ON bills (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS bill_services (
   id            SERIAL PRIMARY KEY,
@@ -557,6 +570,20 @@ CREATE TABLE IF NOT EXISTS admissions (
 CREATE INDEX IF NOT EXISTS idx_admissions_status  ON admissions (status);
 CREATE INDEX IF NOT EXISTS idx_admissions_patient ON admissions (patient_id);
 CREATE INDEX IF NOT EXISTS idx_admissions_bed     ON admissions (bed_id);
+
+-- Wire the bills → admissions FK now that both tables exist. Defined here
+-- (rather than inline in the bills CREATE TABLE) because bills is declared
+-- earlier in this file.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'bills_admission_id_fkey'
+  ) THEN
+    ALTER TABLE bills
+      ADD CONSTRAINT bills_admission_id_fkey
+      FOREIGN KEY (admission_id) REFERENCES admissions(id) ON DELETE CASCADE;
+  END IF;
+END $$;
 
 -- ---------------------------------------------------------------------
 -- REMINDERS — admin notes that pop up at login and live in the bell menu

@@ -70,9 +70,10 @@ export default function BillDetail() {
 
   const isAuto    = bill.billType === 'AUTO';
   const isFinal   = bill.billType === 'FINAL';
+  const isIpd     = bill.billType === 'IPD';
   const isLocked  = bill.status === 'LOCKED';
-  // Auto bills (the standard patient bill) and Active Final bills are both editable.
-  // Only LOCKED Final bills are immutable.
+  // Auto bills (the standard patient bill), Active Final bills and IPD bills
+  // are all editable. Only LOCKED Final bills are immutable.
   const canEdit   = !isLocked;
   // The Lock/Generate flow only applies to Final bills (snapshot for audit).
   const canLock   = isFinal && !isLocked;
@@ -166,11 +167,15 @@ export default function BillDetail() {
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }} gap={2} flexWrap="wrap">
         <Box>
           <Typography variant="h5">
-            {isAuto ? 'Auto Generated Bill' : 'Final / Edited Bill'}
+            {isAuto ? 'OPD Bill'
+             : isIpd ? 'IPD Bill'
+             : 'Final / Edited Bill'}
           </Typography>
           <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
-            <Chip label={bill.billNumber} color={isAuto ? 'primary' : 'secondary'} variant="outlined" />
-            <Chip label={bill.billType} color={isAuto ? 'primary' : 'secondary'} size="small" />
+            <Chip label={bill.billNumber}
+              color={isAuto ? 'primary' : isIpd ? 'warning' : 'secondary'} variant="outlined" />
+            <Chip label={bill.billType}
+              color={isAuto ? 'primary' : isIpd ? 'warning' : 'secondary'} size="small" />
             <Chip label={bill.status} color={isLocked ? 'success' : 'warning'} size="small" />
             {bill.parentBillId && (
               <Chip label="Linked to Auto" size="small" component={RouterLink}
@@ -208,6 +213,13 @@ export default function BillDetail() {
           and <b>Save</b> — then print.
         </Alert>
       )}
+      {isIpd && (
+        <Alert severity="info" sx={{ mb: 2 }}>
+          Indoor patient bill — start with an empty service list. Click <b>Edit</b>,
+          add each service (ECG, Echo, room charges, procedures, etc.) with the
+          right price and quantity, then <b>Save</b>. Print any time.
+        </Alert>
+      )}
       {isFinal && isLocked && (
         <Alert severity="success" sx={{ mb: 2 }}>
           This Final Bill is locked. Print or download the PDF — edits are no longer allowed.
@@ -235,13 +247,32 @@ export default function BillDetail() {
               </Stack>
             </Grid>
             <Grid item xs={12} md={6}>
-              <Typography variant="overline" color="text.secondary">Visit</Typography>
+              <Typography variant="overline" color="text.secondary">
+                {isIpd ? 'Admission' : 'Visit'}
+              </Typography>
               <Stack spacing={0.5}>
-                <Row label="Case No"   value={bill.caseNumber} />
-                <Row label="Case Type" value={bill.caseType === 'NEW' ? 'New Case' : 'Old Case'} />
-                <Row label="Visit"     value={`${new Date(bill.visitDate).toLocaleDateString('en-IN')} ${bill.visitTime || ''}`} />
-                <Row label="By"        value={bill.createdByName} />
-                <Row label="Created"   value={new Date(bill.createdAt).toLocaleString('en-IN')} />
+                {isIpd ? (
+                  <>
+                    <Row label="Adm No"     value={bill.admissionFyKey && bill.admissionNumber
+                      ? `${bill.admissionFyKey}/${bill.admissionNumber}` : '—'} />
+                    <Row label="Ward / Bed" value={bill.wardName
+                      ? `${bill.wardName} — ${bill.bedNumber || '—'}` : '—'} />
+                    <Row label="Diagnosis"  value={bill.admissionDiagnosis} />
+                    <Row label="Admitted"   value={bill.admittedAt
+                      ? new Date(bill.admittedAt).toLocaleString('en-IN') : '—'} />
+                    <Row label="Discharged" value={bill.dischargedAt
+                      ? new Date(bill.dischargedAt).toLocaleString('en-IN') : '—'} />
+                    <Row label="By"         value={bill.createdByName} />
+                  </>
+                ) : (
+                  <>
+                    <Row label="Case No"   value={bill.caseNumber} />
+                    <Row label="Case Type" value={bill.caseType === 'NEW' ? 'New Case' : 'Old Case'} />
+                    <Row label="Visit"     value={`${new Date(bill.visitDate).toLocaleDateString('en-IN')} ${bill.visitTime || ''}`} />
+                    <Row label="By"        value={bill.createdByName} />
+                    <Row label="Created"   value={new Date(bill.createdAt).toLocaleString('en-IN')} />
+                  </>
+                )}
               </Stack>
             </Grid>
           </Grid>

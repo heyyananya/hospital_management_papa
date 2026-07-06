@@ -31,6 +31,7 @@ import ExitToAppIcon from '@mui/icons-material/ExitToApp';
 import AssignmentIcon from '@mui/icons-material/Assignment';
 
 import { useAuth } from '../context/AuthContext.jsx';
+import { hasPermission, PERMISSION_BY_PATH } from '../utils/permissions.js';
 
 const DRAWER_WIDTH = 240;
 
@@ -71,7 +72,7 @@ const NAV = {
     ]},
     { heading: 'Administration', items: [
       { to: '/reminders',       label: 'Reminders',           icon: <NotificationsIcon /> },
-      { to: '/users',           label: 'Users',               icon: <GroupIcon /> },
+      { to: '/users',           label: 'Users & Rights',      icon: <GroupIcon /> },
       { to: '/settings',        label: 'Settings',            icon: <SettingsIcon /> },
     ]},
   ],
@@ -200,7 +201,21 @@ export default function MainLayout() {
     navigate('/ipd/indoor-sheet/recent');
   };
 
-  const sections = NAV[user?.role] || [];
+  // Filter the sidebar by the user's effective permissions. Items whose
+  // route isn't in the permissions catalog stay visible (defence against a
+  // partial catalog); items in the catalog but not granted to this user are
+  // hidden. Empty sections drop out cleanly so their heading vanishes too.
+  const rawSections = NAV[user?.role] || [];
+  const sections = rawSections
+    .map((s) => ({
+      ...s,
+      items: s.items.filter((it) => {
+        const perm = PERMISSION_BY_PATH[it.to];
+        if (!perm) return true;
+        return hasPermission(user, perm.key);
+      }),
+    }))
+    .filter((s) => s.items.length > 0);
   const allItems = sections.flatMap((s) => s.items);
 
   // Pick the single sidebar entry whose `to` is the *longest* prefix of the

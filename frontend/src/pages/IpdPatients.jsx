@@ -1,19 +1,23 @@
 /**
  * IPD Patients — currently-admitted list with days-in-stay + Discharge.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Box, Card, CardContent, Typography, Stack, Button, Table, TableHead,
   TableRow, TableCell, TableBody, TableContainer, Chip, CircularProgress,
   Dialog, DialogTitle, DialogContent, DialogActions, TextField, Alert,
+  InputAdornment, IconButton,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ExitToAppIcon from '@mui/icons-material/ExitToApp';
 import AssignmentIcon from '@mui/icons-material/Assignment';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import SearchIcon from '@mui/icons-material/Search';
+import ClearIcon from '@mui/icons-material/Clear';
 import dayjs from 'dayjs';
 
-import { ipdApi } from '../services/endpoints.js';
+import { ipdApi, billsApi } from '../services/endpoints.js';
 import { useSnackbar } from '../context/SnackbarContext.jsx';
 
 const daysBetween = (from, to = new Date()) => {
@@ -26,8 +30,23 @@ export default function IpdPatients() {
   const [loading, setLoading] = useState(true);
   const [dialog, setDialog] = useState(null); // { admission, notes }
   const [saving, setSaving] = useState(false);
+  const [billing, setBilling] = useState(null); // admission id currently being billed
+  const [q, setQ] = useState('');
   const { notify } = useSnackbar();
   const navigate = useNavigate();
+
+  // Client-side filter across name, patient ID, mobile, admission # and bed —
+  // the admitted list is small enough that server-side search would be overkill.
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((r) => {
+      const hay = `${r.patientName || ''} ${r.patientCode || ''} ${r.mobile || ''} `
+                + `${r.fyKey || ''}/${r.admissionNumber || ''} ${r.bedNumber || ''} `
+                + `${r.wardName || ''}`;
+      return hay.toLowerCase().includes(needle);
+    });
+  }, [rows, q]);
 
   const load = async () => {
     setLoading(true);
@@ -40,6 +59,18 @@ export default function IpdPatients() {
     }
   };
   useEffect(() => { load(); }, []); // eslint-disable-line
+
+  const makeBill = async (admission) => {
+    setBilling(admission.id);
+    try {
+      const b = await billsApi.createIpdFromAdmission(admission.id);
+      navigate(`/bills/${b.id}`);
+    } catch (e) {
+      notify(e?.response?.data?.message || 'Could not create IPD bill', 'error');
+    } finally {
+      setBilling(null);
+    }
+  };
 
   const discharge = async () => {
     setSaving(true);
@@ -61,15 +92,56 @@ export default function IpdPatients() {
   return (
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-        <Typography variant="h5">IPD Patients</Typography>
+        <Box>
+          <Typography variant="h5">IPD Patients</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Click <b>Make a Bill</b> on any row to create an <b>IPD bill</b> — services and charges are added manually on the bill page.
+          </Typography>
+        </Box>
         <Button onClick={load} startIcon={<RefreshIcon />} variant="outlined">Refresh</Button>
       </Stack>
+
+      <Card sx={{ mb: 2 }}>
+        <CardContent>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center" useFlexGap>
+            <TextField
+              size="small"
+              placeholder="Search name, patient ID, mobile, adm #, bed…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              sx={{ flex: 1, minWidth: 260 }}
+              InputProps={{
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <SearchIcon fontSize="small" />
+                  </InputAdornment>
+                ),
+                endAdornment: q ? (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setQ('')}>
+                      <ClearIcon fontSize="small" />
+                    </IconButton>
+                  </InputAdornment>
+                ) : null,
+              }}
+            />
+            <Chip
+              size="small"
+              label={`${filtered.length} of ${rows.length} admitted`}
+              variant="outlined"
+            />
+          </Stack>
+        </CardContent>
+      </Card>
+
       <Card>
         <CardContent>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
           ) : rows.length === 0 ? (
             <Alert severity="info">No admitted patients right now.</Alert>
+          ) : filtered.length === 0 ? (
+            <Alert severity="info">No admitted patients match “{q}”.</Alert>
           ) : (
             <TableContainer>
               <Table size="small">
@@ -87,7 +159,7 @@ export default function IpdPatients() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {rows.map((r) => (
+                  {filtered.map((r) => (
                     <TableRow key={r.id} hover>
                       <TableCell>
                         <Chip size="small" color="warning" label={`${r.fyKey}/${r.admissionNumber}`} />
@@ -104,6 +176,11 @@ export default function IpdPatients() {
                           <Button size="small" variant="outlined" startIcon={<AssignmentIcon />}
                             onClick={() => navigate(`/ipd/admissions/${r.id}/indoor-sheet`)}>
                             Indoor Sheet
+                          </Button>
+                          <Button size="small" variant="outlined" color="primary" startIcon={<ReceiptLongIcon />}
+                            disabled={billing === r.id}
+                            onClick={() => makeBill(r)}>
+                            {billing === r.id ? 'Opening…' : 'Make a Bill'}
                           </Button>
                           <Button size="small" variant="contained" color="error" startIcon={<ExitToAppIcon />}
                             onClick={() => setDialog({ admission: r, notes: '' })}>

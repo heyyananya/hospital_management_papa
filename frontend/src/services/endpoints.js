@@ -9,6 +9,8 @@ export const authApi = {
   login: (data) => api.post('/auth/login', data).then((r) => r.data),
   me: () => api.get('/auth/me').then((r) => r.data),
   logout: () => api.post('/auth/logout'),
+  verify: (password, context) =>
+    api.post('/auth/verify', { password, context }).then((r) => r.data),
 };
 
 export const patientsApi = {
@@ -74,8 +76,11 @@ export const printApi = {
 export const billsApi = {
   listAuto:  (params) => api.get('/bills/auto',  { params }).then((r) => r.data),
   listFinal: (params) => api.get('/bills/final', { params }).then((r) => r.data),
+  listIpd:   (params) => api.get('/bills/ipd',   { params }).then((r) => r.data),
   get:       (id)     => api.get(`/bills/${id}`).then((r) => r.data),
   convertToFinal: (id) => api.post(`/bills/${id}/convert`).then((r) => r.data),
+  createIpdFromAdmission: (admissionId) =>
+    api.post(`/bills/ipd/from-admission/${admissionId}`).then((r) => r.data),
   update:    (id, data) => api.put(`/bills/${id}`, data).then((r) => r.data),
   lock:      (id)     => api.post(`/bills/${id}/lock`).then((r) => r.data),
 };

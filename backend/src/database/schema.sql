@@ -612,6 +612,11 @@ ALTER TABLE reminders ADD COLUMN IF NOT EXISTS target_roles TEXT[]
 -- row stays for the audit trail but stops appearing in the bell/login popup.
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
 ALTER TABLE reminders ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id);
+-- Recurrence: one row per "template". When both are set, the reminder is
+-- treated as active only on days where the calendar date matches the rule
+-- (day-of-month AND months-since-start divisible by the interval).
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS recurrence_day_of_month INTEGER;
+ALTER TABLE reminders ADD COLUMN IF NOT EXISTS recurrence_every_months INTEGER;
 CREATE INDEX IF NOT EXISTS idx_reminders_window
   ON reminders (starts_at, ends_at) WHERE deleted_at IS NULL;
 

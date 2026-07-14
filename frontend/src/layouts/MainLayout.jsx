@@ -32,91 +32,56 @@ import AssignmentIcon from '@mui/icons-material/Assignment';
 
 import { useAuth } from '../context/AuthContext.jsx';
 import { hasPermission, PERMISSION_BY_PATH } from '../utils/permissions.js';
+import GlobalSearch from '../components/GlobalSearch.jsx';
 
 const DRAWER_WIDTH = 240;
 
-// Sidebar structure — grouped for scanability. Each role gets an ordered
-// list of sections; each section is `{ heading, items[] }`. `heading: null`
-// means the group renders without a title (used for the lone Dashboard).
-const NAV = {
-  ADMIN: [
-    { heading: null, items: [
-      { to: '/',                label: 'Dashboard',           icon: <DashboardIcon /> },
-    ]},
-    { heading: 'Patients', items: [
-      { to: '/patients/new',    label: 'Register Patient',    icon: <PersonAddIcon /> },
-      { to: '/patients/search', label: 'Patients',            icon: <SearchIcon /> },
-      { to: '/mo/stats',        label: 'Patients Attended',   icon: <AssessmentIcon /> },
-    ]},
-    { heading: 'Clinical Queues', items: [
-      { to: '/mo',              label: 'MO Queue',            icon: <MonitorHeartIcon /> },
-      { to: '/doctor',          label: 'Doctor Queue',        icon: <LocalHospitalIcon /> },
-    ]},
-    { heading: 'Records & Billing', items: [
-      { to: '/visits',          label: 'All Visits',          icon: <ListAltIcon /> },
-      { to: '/bills/auto',      label: 'Auto Generated Bills',icon: <ReceiptLongIcon /> },
-      { to: '/registers/3c',    label: '3C Register OPD',     icon: <MenuBookIcon /> },
-      { to: '/registers/3c-ipd',label: '3C Register IPD',     icon: <MenuBookIcon /> },
-    ]},
-    { heading: 'Masters', items: [
-      { to: '/services',        label: 'Services & Prices',   icon: <CurrencyRupeeIcon /> },
-      { to: '/masters',         label: 'Other Masters',       icon: <ListAltIcon /> },
-      { to: '/disease-templates', label: 'Disease Medicines', icon: <VaccinesIcon /> },
-      { to: '/wards-beds',      label: 'Rooms Master',        icon: <MeetingRoomIcon /> },
-    ]},
-    { heading: 'IPD', items: [
-      { to: '/ipd/pending',     label: 'Pending Admissions',  icon: <HowToRegIcon /> },
-      { to: '/ipd/patients',    label: 'IPD Patients',        icon: <HotelIcon /> },
-      { to: '/ipd/discharged',  label: 'Discharged Patients', icon: <ExitToAppIcon /> },
-      { to: '/ipd/indoor-sheet/recent', label: 'Recent Indoor Sheets', icon: <AssignmentIcon /> },
-    ]},
-    { heading: 'Administration', items: [
-      { to: '/reminders',       label: 'Reminders',           icon: <NotificationsIcon /> },
-      { to: '/users',           label: 'Users & Rights',      icon: <GroupIcon /> },
-      { to: '/settings',        label: 'Settings',            icon: <SettingsIcon /> },
-    ]},
-  ],
-  RECEPTIONIST: [
-    { heading: null, items: [
-      { to: '/',                label: 'Dashboard',           icon: <DashboardIcon /> },
-    ]},
-    { heading: 'Patients', items: [
-      { to: '/patients/new',    label: 'Register Patient',    icon: <PersonAddIcon /> },
-      { to: '/patients/search', label: 'Patients',            icon: <SearchIcon /> },
-    ]},
-    { heading: 'Records & Billing', items: [
-      { to: '/visits',          label: 'Visits',              icon: <ListAltIcon /> },
-      { to: '/bills/auto',      label: 'Auto Generated Bills',icon: <ReceiptLongIcon /> },
-      { to: '/registers/3c',    label: '3C Register OPD',     icon: <MenuBookIcon /> },
-      { to: '/registers/3c-ipd',label: '3C Register IPD',     icon: <MenuBookIcon /> },
-    ]},
-    { heading: 'IPD', items: [
-      { to: '/ipd/pending',     label: 'Pending Admissions',  icon: <HowToRegIcon /> },
-      { to: '/ipd/patients',    label: 'IPD Patients',        icon: <HotelIcon /> },
-      { to: '/ipd/discharged',  label: 'Discharged Patients', icon: <ExitToAppIcon /> },
-    ]},
-    { heading: 'Masters', items: [
-      { to: '/services',        label: 'Services & Prices',   icon: <CurrencyRupeeIcon /> },
-      { to: '/wards-beds',      label: 'Rooms Master',        icon: <MeetingRoomIcon /> },
-    ]},
-    { heading: 'Administration', items: [
-      { to: '/settings',        label: 'Settings',            icon: <SettingsIcon /> },
-    ]},
-  ],
-  MEDICAL_OFFICER: [
-    { heading: null, items: [
-      { to: '/',                label: 'Dashboard',           icon: <DashboardIcon /> },
-    ]},
-    { heading: 'Clinical', items: [
-      { to: '/mo',              label: 'MO Queue',            icon: <MonitorHeartIcon /> },
-      { to: '/mo/stats',        label: 'My Attended Patients',icon: <AssessmentIcon /> },
-    ]},
-    { heading: 'Patients', items: [
-      { to: '/patients/new',    label: 'Register Patient',    icon: <PersonAddIcon /> },
-      { to: '/patients/search', label: 'Patients',            icon: <SearchIcon /> },
-    ]},
-  ],
-};
+// One MASTER sidebar structure for everyone. The permission catalog decides
+// what each user actually sees — so any right the admin grants immediately
+// surfaces in that user's sidebar, no per-role NAV template to keep in sync.
+//
+// Each item's `to` path MUST correspond to a permission key in
+// utils/permissions.js — the filter below hides items whose permission is
+// not granted. Items whose `to` isn't in the catalog stay visible for
+// everyone (defence against a partial catalog while adding a new page).
+const NAV = [
+  { heading: null, items: [
+    { to: '/',                label: 'Dashboard',           icon: <DashboardIcon /> },
+  ]},
+  { heading: 'Patients', items: [
+    { to: '/patients/new',    label: 'Register Patient',    icon: <PersonAddIcon /> },
+    { to: '/patients/search', label: 'Patients',            icon: <SearchIcon /> },
+    { to: '/mo/stats',        label: 'Patients Attended',   icon: <AssessmentIcon /> },
+  ]},
+  { heading: 'Clinical Queues', items: [
+    { to: '/mo',                  label: 'MO Queue',        icon: <MonitorHeartIcon /> },
+    { to: '/doctor',              label: 'Doctor Queue',    icon: <LocalHospitalIcon /> },
+    { to: '/ipd/discharge-queue', label: 'Discharge Queue', icon: <ExitToAppIcon /> },
+  ]},
+  { heading: 'Records & Billing', items: [
+    { to: '/visits',          label: 'Visits',              icon: <ListAltIcon /> },
+    { to: '/bills/auto',      label: 'Auto Generated Bills',icon: <ReceiptLongIcon /> },
+    { to: '/registers/3c',    label: '3C Register OPD',     icon: <MenuBookIcon /> },
+    { to: '/registers/3c-ipd',label: '3C Register IPD',     icon: <MenuBookIcon /> },
+  ]},
+  { heading: 'Masters', items: [
+    { to: '/services',        label: 'Services & Prices',   icon: <CurrencyRupeeIcon /> },
+    { to: '/masters',         label: 'Other Masters',       icon: <ListAltIcon /> },
+    { to: '/disease-templates', label: 'Disease Medicines', icon: <VaccinesIcon /> },
+    { to: '/wards-beds',      label: 'Rooms Master',        icon: <MeetingRoomIcon /> },
+  ]},
+  { heading: 'IPD', items: [
+    { to: '/ipd/pending',        label: 'Pending Admissions',  icon: <HowToRegIcon /> },
+    { to: '/ipd/patients',       label: 'IPD Patients',        icon: <HotelIcon /> },
+    { to: '/ipd/discharged',     label: 'Discharged Patients', icon: <ExitToAppIcon /> },
+    { to: '/ipd/indoor-sheet/recent', label: 'Recent Indoor Sheets', icon: <AssignmentIcon /> },
+  ]},
+  { heading: 'Administration', items: [
+    { to: '/reminders',       label: 'Reminders',           icon: <NotificationsIcon /> },
+    { to: '/users',           label: 'Users & Rights',      icon: <GroupIcon /> },
+    { to: '/settings',        label: 'Settings',            icon: <SettingsIcon /> },
+  ]},
+];
 
 const roleLabel = {
   ADMIN: 'Admin / Doctor',
@@ -201,12 +166,12 @@ export default function MainLayout() {
     navigate('/ipd/indoor-sheet/recent');
   };
 
-  // Filter the sidebar by the user's effective permissions. Items whose
-  // route isn't in the permissions catalog stay visible (defence against a
-  // partial catalog); items in the catalog but not granted to this user are
-  // hidden. Empty sections drop out cleanly so their heading vanishes too.
-  const rawSections = NAV[user?.role] || [];
-  const sections = rawSections
+  // Filter the ONE master sidebar by the user's effective permissions.
+  // Items whose route isn't in the permissions catalog stay visible
+  // (defence against a partial catalog); items in the catalog but not
+  // granted to this user are hidden. Empty sections drop out cleanly so
+  // their heading vanishes with them.
+  const sections = NAV
     .map((s) => ({
       ...s,
       items: s.items.filter((it) => {
@@ -335,6 +300,10 @@ export default function MainLayout() {
             <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>FEFSA Hospital</Box>
             <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>FEFSA Hospital — Management</Box>
           </Typography>
+          {/* Global search — jump to any granted page or any patient in one shot. */}
+          <Box sx={{ display: { xs: 'none', sm: 'flex' }, mr: 1 }}>
+            <GlobalSearch />
+          </Box>
           <Chip
             label={roleLabel[user?.role] || user?.role}
             size="small"

@@ -13,6 +13,7 @@ import HowToRegIcon from '@mui/icons-material/HowToReg';
 import { patientsApi, mastersApi } from '../services/endpoints.js';
 import { useSnackbar } from '../context/SnackbarContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import BillRateSelector from '../components/BillRateSelector.jsx';
 
 const GENDERS = ['Male', 'Female', 'Other'];
 const STATES  = ['Gujarat', 'Rajasthan', 'Other'];
@@ -65,6 +66,9 @@ function OldCasePicker({ notify, navigate }) {
   // Single busy id at a time — prevents accidental double-clicks across
   // different rows during the network round-trip.
   const [busyId, setBusyId] = useState(null);
+  // Bill rate for the next Put-in-Queue click. Defaults to Old Case;
+  // reception can flip to New Case for long-gap returning patients.
+  const [billCaseType, setBillCaseType] = useState('OLD');
   // Last-created visit banner so the receptionist sees clear confirmation
   // and a jump-off link. Cleared whenever a new search starts.
   const [lastCreated, setLastCreated] = useState(null); // { visit, patient }
@@ -151,10 +155,11 @@ function OldCasePicker({ notify, navigate }) {
     setBusyId(p.id);
     setDupDialog(null);
     try {
-      const r = await patientsApi.createOldCase(p.id, {}, { force });
+      const r = await patientsApi.createOldCase(p.id, {}, { force, billCaseType });
       setLastCreated({ visit: r.visit, patient: p });
+      const rateLabel = billCaseType === 'NEW' ? 'New Case (₹400)' : 'Old Case (₹200)';
       notify(
-        `Case #${r.visit.caseNumber} created — ${p.firstName} ${p.surname} is now in the MO queue.`,
+        `Case #${r.visit.caseNumber} created — ${p.firstName} ${p.surname} is now in the MO queue. Billed as ${rateLabel}.`,
         'success'
       );
       // Clear the search so the receptionist can register the next patient.
@@ -217,6 +222,17 @@ function OldCasePicker({ notify, navigate }) {
           Enter the Patient ID and press <b>Enter</b> (or Tab). The patient&apos;s name and
           mobile will be filled automatically. Clicking <b>Put in Queue</b> {roleHint}
         </Typography>
+
+        <BillRateSelector
+          value={billCaseType}
+          onChange={setBillCaseType}
+          label="Put in Queue as"
+          hint={
+            <>Flip to <b>New Case</b> when a long-gap returning patient should
+            be treated as a fresh consultation.</>
+          }
+          sx={{ mb: 2 }}
+        />
 
         {/* Just-added confirmation banner. Sticks around until the next search
             so the receptionist has a clear record of what they just did. */}
@@ -428,6 +444,10 @@ function NewCaseForm({ notify, navigate }) {
   });
   const [submitting, setSubmitting] = useState(false);
   const [villages, setVillages] = useState([]);
+  // Bill rate for this new-registration visit. Reception can flip to OLD
+  // when the person is actually a returning patient (from the pre-migration
+  // legacy system) but doesn't yet exist in the new database.
+  const [billCaseType, setBillCaseType] = useState('NEW');
   // Bumped after a successful save to force-remount every field — this
   // clears MUI's internal Autocomplete input which reset() alone can't touch.
   const [formKey, setFormKey] = useState(0);
@@ -452,6 +472,7 @@ function NewCaseForm({ notify, navigate }) {
         ...data,
         village: (data.village || '').toString().trim(),
         villageId: data.villageId || null,
+        billCaseType,      // NEW = ₹400, OLD = ₹200 — see patientService
       };
       // When "Other" is selected, use the manually entered text as the state.
       if (data.state === 'Other') {
@@ -460,9 +481,14 @@ function NewCaseForm({ notify, navigate }) {
       delete payload.stateOther;
 
       const r = await patientsApi.createNew(payload);
-      notify(`Patient ${r.patient.patientCode} registered, Case #${r.visit.caseNumber}`, 'success');
+      const rateLabel = billCaseType === 'OLD' ? 'Old Case (₹200)' : 'New Case (₹400)';
+      notify(
+        `Patient ${r.patient.patientCode} registered, Case #${r.visit.caseNumber} — billed as ${rateLabel}.`,
+        'success'
+      );
       // Stay on the Register Patient page — clear every field for the next patient.
       reset({ state: 'Gujarat' });
+      setBillCaseType('NEW');
       setFormKey((k) => k + 1);     // force-remount so MUI Autocomplete text clears too
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (e) {
@@ -477,6 +503,19 @@ function NewCaseForm({ notify, navigate }) {
       <CardContent>
         <form key={formKey} onSubmit={handleSubmit(onSubmit)} noValidate>
           <Grid container spacing={2}>
+
+            <Grid item xs={12}>
+              <BillRateSelector
+                value={billCaseType}
+                onChange={setBillCaseType}
+                label="Bill this new patient as"
+                hint={
+                  <>Pick <b>Old Case</b> when the patient is actually a returning
+                  patient (from the old system) but doesn't exist in the database
+                  yet — the bill will be created at the ₹200 rate.</>
+                }
+              />
+            </Grid>
 
             <Grid item xs={12}>
               <Typography variant="overline" color="text.secondary">Demographics</Typography>

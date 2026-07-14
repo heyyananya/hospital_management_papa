@@ -37,6 +37,8 @@ export const PERMISSIONS = [
     path: '/mo' },
   { key: 'doctor.queue',      label: 'Doctor Queue',         group: 'Clinical Queues',
     path: '/doctor' },
+  { key: 'ipd.discharge-queue', label: 'Discharge Queue',    group: 'Clinical Queues',
+    path: '/ipd/discharge-queue' },
 
   { key: 'visits.list',       label: 'All Visits',           group: 'Records & Billing',
     path: '/visits' },
@@ -101,7 +103,7 @@ export const ROLE_DEFAULTS = {
     'visits.list', 'bills.auto',
     'registers.3c', 'registers.3c-ipd',
     'services', 'wards-beds',
-    'ipd.pending', 'ipd.patients', 'ipd.discharged',
+    'ipd.pending', 'ipd.patients', 'ipd.discharge-queue', 'ipd.discharged',
     'settings',
   ],
 };

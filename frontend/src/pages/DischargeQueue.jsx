@@ -1,5 +1,16 @@
 /**
- * IPD Patients — currently-admitted list with days-in-stay + Discharge.
+ * Discharge Queue — currently-admitted patients waiting for discharge.
+ *
+ * Flow the clinic uses:
+ *   1. Doctor "Admits" from the visit page       → REQUESTED admission
+ *   2. Reception assigns a bed in Pending Admissions → ADMITTED
+ *      → shows up here.
+ *   3. When it's time to send the patient home, reception clicks
+ *      **Discharge → Doctor Queue** on their row. That:
+ *        - Marks the admission DISCHARGED and frees the bed.
+ *        - Creates a fresh WAITING_FOR_DOCTOR visit so the doctor sees the
+ *          patient in the Doctor Queue for a discharge consultation.
+ *        - Drops a 3C Register IPD entry.
  */
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -11,13 +22,12 @@ import {
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ExitToAppIcon from '@mui/icons-material/ExitToApp';
-import AssignmentIcon from '@mui/icons-material/Assignment';
-import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Clear';
+import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 import dayjs from 'dayjs';
 
-import { ipdApi, billsApi } from '../services/endpoints.js';
+import { ipdApi } from '../services/endpoints.js';
 import { useSnackbar } from '../context/SnackbarContext.jsx';
 
 const daysBetween = (from, to = new Date()) => {
@@ -25,28 +35,16 @@ const daysBetween = (from, to = new Date()) => {
   return Math.max(0, Math.round(ms / (1000 * 60 * 60 * 24)));
 };
 
-export default function IpdPatients() {
+export default function DischargeQueue() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Discharge confirmation dialog. Holds the admission we're about to send
+  // to the Doctor Queue plus any notes the reception wants to attach.
   const [dialog, setDialog] = useState(null); // { admission, notes }
   const [saving, setSaving] = useState(false);
-  const [billing, setBilling] = useState(null); // admission id currently being billed
   const [q, setQ] = useState('');
   const { notify } = useSnackbar();
   const navigate = useNavigate();
-
-  // Client-side filter across name, patient ID, mobile, admission # and bed —
-  // the admitted list is small enough that server-side search would be overkill.
-  const filtered = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((r) => {
-      const hay = `${r.patientName || ''} ${r.patientCode || ''} ${r.mobile || ''} `
-                + `${r.fyKey || ''}/${r.admissionNumber || ''} ${r.bedNumber || ''} `
-                + `${r.wardName || ''}`;
-      return hay.toLowerCase().includes(needle);
-    });
-  }, [rows, q]);
 
   const load = async () => {
     setLoading(true);
@@ -60,27 +58,29 @@ export default function IpdPatients() {
   };
   useEffect(() => { load(); }, []); // eslint-disable-line
 
-  const makeBill = async (admission) => {
-    setBilling(admission.id);
-    try {
-      const b = await billsApi.createIpdFromAdmission(admission.id);
-      navigate(`/bills/${b.id}`);
-    } catch (e) {
-      notify(e?.response?.data?.message || 'Could not create IPD bill', 'error');
-    } finally {
-      setBilling(null);
-    }
-  };
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((r) => {
+      const hay = `${r.patientName || ''} ${r.patientCode || ''} ${r.mobile || ''} `
+                + `${r.fyKey || ''}/${r.admissionNumber || ''} ${r.bedNumber || ''} `
+                + `${r.wardName || ''}`;
+      return hay.toLowerCase().includes(needle);
+    });
+  }, [rows, q]);
 
   const discharge = async () => {
     setSaving(true);
     try {
       const r = await ipdApi.admissions.discharge(dialog.admission.id, dialog.notes);
+      // Backend now returns the follow-up visit alongside the admission —
+      // surface the case # so reception knows exactly what to look for in
+      // the Doctor Queue.
       const followupCase = r?.followupVisit?.caseNumber;
       notify(
         followupCase
-          ? `${dialog.admission.patientName} discharged. Bed freed. Sent to Doctor Queue as Case #${followupCase}. 3C Register IPD updated.`
-          : `${dialog.admission.patientName} discharged. Bed freed. Added to 3C Register IPD — set the amount there.`,
+          ? `${dialog.admission.patientName} discharged. Bed freed. Sent to Doctor Queue as Case #${followupCase}.`
+          : `${dialog.admission.patientName} discharged. Bed freed.`,
         'success'
       );
       setDialog(null);
@@ -96,9 +96,10 @@ export default function IpdPatients() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
         <Box>
-          <Typography variant="h5">IPD Patients</Typography>
+          <Typography variant="h5">Discharge Queue</Typography>
           <Typography variant="body2" color="text.secondary">
-            Click <b>Make a Bill</b> on any row to create an <b>IPD bill</b> — services and charges are added manually on the bill page.
+            Currently-admitted patients. Click <b>Discharge → Doctor Queue</b> to send the
+            patient to the doctor for a discharge consultation.
           </Typography>
         </Box>
         <Button onClick={load} startIcon={<RefreshIcon />} variant="outlined">Refresh</Button>
@@ -115,9 +116,7 @@ export default function IpdPatients() {
               sx={{ flex: 1, minWidth: 260 }}
               InputProps={{
                 startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
+                  <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment>
                 ),
                 endAdornment: q ? (
                   <InputAdornment position="end">
@@ -128,11 +127,7 @@ export default function IpdPatients() {
                 ) : null,
               }}
             />
-            <Chip
-              size="small"
-              label={`${filtered.length} of ${rows.length} admitted`}
-              variant="outlined"
-            />
+            <Chip size="small" label={`${filtered.length} of ${rows.length} in queue`} variant="outlined" />
           </Stack>
         </CardContent>
       </Card>
@@ -142,7 +137,7 @@ export default function IpdPatients() {
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}><CircularProgress /></Box>
           ) : rows.length === 0 ? (
-            <Alert severity="info">No admitted patients right now.</Alert>
+            <Alert severity="info">No admitted patients right now — nothing to discharge.</Alert>
           ) : filtered.length === 0 ? (
             <Alert severity="info">No admitted patients match “{q}”.</Alert>
           ) : (
@@ -175,21 +170,11 @@ export default function IpdPatients() {
                       <TableCell>{dayjs(r.admittedAt).format('DD/MM/YY HH:mm')}</TableCell>
                       <TableCell>{daysBetween(r.admittedAt)}</TableCell>
                       <TableCell align="right">
-                        <Stack direction="row" spacing={1} justifyContent="flex-end">
-                          <Button size="small" variant="outlined" startIcon={<AssignmentIcon />}
-                            onClick={() => navigate(`/ipd/admissions/${r.id}/indoor-sheet`)}>
-                            Indoor Sheet
-                          </Button>
-                          <Button size="small" variant="outlined" color="primary" startIcon={<ReceiptLongIcon />}
-                            disabled={billing === r.id}
-                            onClick={() => makeBill(r)}>
-                            {billing === r.id ? 'Opening…' : 'Make a Bill'}
-                          </Button>
-                          <Button size="small" variant="contained" color="error" startIcon={<ExitToAppIcon />}
-                            onClick={() => setDialog({ admission: r, notes: '' })}>
-                            Discharge
-                          </Button>
-                        </Stack>
+                        <Button size="small" variant="contained" color="success"
+                          startIcon={<LocalHospitalIcon />}
+                          onClick={() => setDialog({ admission: r, notes: '' })}>
+                          Discharge → Doctor Queue
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -201,14 +186,16 @@ export default function IpdPatients() {
       </Card>
 
       <Dialog open={!!dialog} onClose={() => setDialog(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Discharge patient</DialogTitle>
+        <DialogTitle>Discharge to Doctor Queue</DialogTitle>
         <DialogContent dividers>
           {dialog && (
             <Stack spacing={2}>
-              <Alert severity="warning">
-                Discharge <strong>{dialog.admission.patientName}</strong> from bed
-                <strong> {dialog.admission.bedNumber}</strong> ({dialog.admission.wardName})?
-                The bed will be marked FREE.
+              <Alert severity="info">
+                Discharging <strong>{dialog.admission.patientName}</strong> from bed
+                <strong> {dialog.admission.bedNumber}</strong> ({dialog.admission.wardName}).
+                <br />
+                The bed will be freed and the patient will appear in the
+                <b> Doctor Queue</b> as a fresh case for the discharge consultation.
               </Alert>
               <TextField
                 label="Discharge notes (optional)"
@@ -221,8 +208,10 @@ export default function IpdPatients() {
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
           <Button onClick={() => setDialog(null)}>Cancel</Button>
-          <Button variant="contained" color="error" onClick={discharge} disabled={saving}>
-            {saving ? <CircularProgress size={18} color="inherit" /> : 'Confirm Discharge'}
+          <Button variant="contained" color="success"
+            startIcon={<ExitToAppIcon />}
+            onClick={discharge} disabled={saving}>
+            {saving ? <CircularProgress size={18} color="inherit" /> : 'Confirm & Send to Doctor'}
           </Button>
         </DialogActions>
       </Dialog>

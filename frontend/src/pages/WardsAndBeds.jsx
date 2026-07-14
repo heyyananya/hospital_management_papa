@@ -274,12 +274,14 @@ export default function WardsAndBeds() {
     } catch (e) { notify(e?.response?.data?.message || 'Save failed', 'error'); }
   };
   const removeWard = async (w) => {
-    if (!window.confirm(`Delete "${w.name}"? Existing beds will be deactivated.`)) return;
     try {
       await ipdApi.wards.remove(w.id);
       notify('Room removed', 'success');
       await load();
-    } catch (e) { notify(e?.response?.data?.message || 'Failed', 'error'); }
+    } catch (e) {
+      if (e?.cancelled) return;
+      notify(e?.response?.data?.message || 'Failed', 'error');
+    }
   };
 
   /* -------- Single-bed edit / add -------- */
@@ -307,13 +309,15 @@ export default function WardsAndBeds() {
   const removeBed = async () => {
     const b = bedDialog;
     if (!b?.id) return;
-    if (!window.confirm(`Delete bed ${b.bedNumber}?`)) return;
     try {
       await ipdApi.beds.remove(b.id);
       notify('Bed removed', 'success');
       setBedDialog(null);
       await load();
-    } catch (e) { notify(e?.response?.data?.message || 'Failed', 'error'); }
+    } catch (e) {
+      if (e?.cancelled) return;
+      notify(e?.response?.data?.message || 'Failed', 'error');
+    }
   };
 
   /* -------- Bulk add -------- */

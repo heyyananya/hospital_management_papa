@@ -9,6 +9,7 @@ import App from './App.jsx';
 import theme from './theme.js';
 import { AuthProvider } from './context/AuthContext.jsx';
 import { SnackbarProvider } from './context/SnackbarContext.jsx';
+import { ConfirmProvider } from './context/ConfirmContext.jsx';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -16,11 +17,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       <CssBaseline />
       <LocalizationProvider dateAdapter={AdapterDayjs}>
         <SnackbarProvider>
-          <BrowserRouter>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </BrowserRouter>
+          <ConfirmProvider>
+            <BrowserRouter>
+              <AuthProvider>
+                <App />
+              </AuthProvider>
+            </BrowserRouter>
+          </ConfirmProvider>
         </SnackbarProvider>
       </LocalizationProvider>
     </ThemeProvider>

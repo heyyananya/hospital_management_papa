@@ -10,13 +10,15 @@ const HttpError = require('../utils/HttpError');
 const TYPES = new Set(['SHORT_TERM', 'LONG_TERM']);
 const ROLES = new Set(['ADMIN', 'RECEPTIONIST', 'MEDICAL_OFFICER']);
 
-// Idempotent bootstrap so existing DBs pick up the completion columns on
-// first use without needing a manual `npm run init`.
+// Idempotent bootstrap so existing DBs pick up the completion + recurrence
+// columns on first use without needing a manual `npm run init`.
 let completedColsEnsured = false;
 const ensureCompletedCols = async () => {
   if (completedColsEnsured) return;
   await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ`);
   await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS completed_by INTEGER REFERENCES users(id)`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS recurrence_day_of_month INTEGER`);
+  await pool.query(`ALTER TABLE reminders ADD COLUMN IF NOT EXISTS recurrence_every_months INTEGER`);
   completedColsEnsured = true;
 };
 
@@ -28,6 +30,8 @@ const SELECT = `
          r.created_at   AS "createdAt",
          r.completed_at AS "completedAt",
          r.completed_by AS "completedBy",
+         r.recurrence_day_of_month AS "recurrenceDayOfMonth",
+         r.recurrence_every_months AS "recurrenceEveryMonths",
          u.full_name    AS "createdByName",
          cu.full_name   AS "completedByName"
     FROM reminders r
@@ -48,10 +52,28 @@ const list = async ({ activeOnly = false, viewerRole } = {}) => {
   const where = [];
   const params = [];
   if (activeOnly) {
-    where.push('NOW() BETWEEN r.starts_at AND r.ends_at');
-    // Completed reminders drop out of the "active" feed even if their
-    // window hasn't closed yet — the admin has already ticked them off.
-    where.push('r.completed_at IS NULL');
+    // Non-recurring rows: current time inside [starts_at, ends_at].
+    // Recurring rows: today is inside the window AND today's day-of-month
+    // matches the rule AND the calendar-month delta from starts_at is a
+    // multiple of the interval.
+    where.push(`r.completed_at IS NULL`);
+    where.push(`(
+      (r.recurrence_day_of_month IS NULL AND NOW() BETWEEN r.starts_at AND r.ends_at)
+      OR (
+        r.recurrence_day_of_month IS NOT NULL
+        AND CURRENT_DATE BETWEEN r.starts_at::date AND r.ends_at::date
+        AND EXTRACT(DAY   FROM CURRENT_DATE) = LEAST(
+          r.recurrence_day_of_month,
+          EXTRACT(DAY FROM (date_trunc('month', CURRENT_DATE)
+                          + INTERVAL '1 month' - INTERVAL '1 day'))
+        )
+        AND MOD(
+          (EXTRACT(YEAR  FROM CURRENT_DATE)::int * 12 + EXTRACT(MONTH FROM CURRENT_DATE)::int)
+          - (EXTRACT(YEAR  FROM r.starts_at)::int * 12 + EXTRACT(MONTH FROM r.starts_at)::int),
+          GREATEST(r.recurrence_every_months, 1)
+        ) = 0
+      )
+    )`);
   }
   if (viewerRole) {
     params.push(viewerRole);
@@ -97,21 +119,41 @@ const normalizeType = (type) => {
   return t;
 };
 
-const create = async ({ text, type, targetRoles, startsAt, endsAt }, user) => {
+// Clamps a recurrence field to a sane range and returns null if the input
+// is missing / invalid — so a plain non-recurring create stays non-recurring.
+const clampRecurrence = (dayOfMonth, everyMonths) => {
+  const dom = parseInt(dayOfMonth, 10);
+  const em  = parseInt(everyMonths, 10);
+  if (!Number.isFinite(dom) || !Number.isFinite(em)) return { dom: null, em: null };
+  const clampedDom = Math.min(31, Math.max(1, dom));
+  const clampedEm  = Math.min(24, Math.max(1, em));
+  return { dom: clampedDom, em: clampedEm };
+};
+
+const create = async ({
+  text, type, targetRoles, startsAt, endsAt,
+  recurrenceDayOfMonth, recurrenceEveryMonths,
+}, user) => {
   const t = (text || '').trim();
   if (!t) throw new HttpError(400, 'text is required');
   validateWindow(startsAt, endsAt);
   const typ = normalizeType(type);
   const roles = normalizeRoles(targetRoles);
+  const { dom, em } = clampRecurrence(recurrenceDayOfMonth, recurrenceEveryMonths);
   const { rows } = await pool.query(
-    `INSERT INTO reminders (text, type, target_roles, starts_at, ends_at, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-    [t, typ, roles, startsAt, endsAt, user.id]
+    `INSERT INTO reminders (
+       text, type, target_roles, starts_at, ends_at, created_by,
+       recurrence_day_of_month, recurrence_every_months
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [t, typ, roles, startsAt, endsAt, user.id, dom, em]
   );
   return get(rows[0].id);
 };
 
-const update = async (id, { text, type, targetRoles, startsAt, endsAt }) => {
+const update = async (id, {
+  text, type, targetRoles, startsAt, endsAt,
+  recurrenceDayOfMonth, recurrenceEveryMonths,
+}) => {
   const set = [];
   const params = [];
   let i = 1;
@@ -134,6 +176,13 @@ const update = async (id, { text, type, targetRoles, startsAt, endsAt }) => {
     validateWindow(newStart, newEnd);
     set.push(`starts_at = $${i++}`); params.push(newStart);
     set.push(`ends_at   = $${i++}`); params.push(newEnd);
+  }
+  // Recurrence: null / omitted → keep existing, "clear" → passes both as null
+  // via the clampRecurrence branch below.
+  if (recurrenceDayOfMonth !== undefined || recurrenceEveryMonths !== undefined) {
+    const { dom, em } = clampRecurrence(recurrenceDayOfMonth, recurrenceEveryMonths);
+    set.push(`recurrence_day_of_month = $${i++}`); params.push(dom);
+    set.push(`recurrence_every_months = $${i++}`); params.push(em);
   }
   if (!set.length) throw new HttpError(400, 'Nothing to update');
   params.push(id);

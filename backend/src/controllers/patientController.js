@@ -30,16 +30,17 @@ exports.createOldCase = asyncHandler(async (req, res) => {
   // `force` bypasses the "already-in-queue-today" guard. Only used when the
   // receptionist explicitly confirms the duplicate via the frontend dialog.
   const force = req.body?.force === true || req.query.force === 'true' || req.query.force === '1';
+  const billCaseType = req.body?.billCaseType === 'NEW' ? 'NEW' : 'OLD';
   const result = await patientService.createOldCaseVisit(
     req.params.id,
     req.body?.demographics || {},
     req.user,
-    { force }
+    { force, billCaseType }
   );
   audit({
     userId: req.user.id, action: 'CREATE_VISIT', entity: 'patient_visits',
     entityId: result.visit.id,
-    meta: { patientId: result.patient.id, force },
+    meta: { patientId: result.patient.id, force, billCaseType },
     ip: req.ip,
   });
   res.status(201).json(result);

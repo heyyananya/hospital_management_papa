@@ -77,12 +77,13 @@ export default function Users() {
   };
 
   const deactivate = async (u) => {
-    if (!window.confirm(`Deactivate user "${u.username}"?`)) return;
+    // Global confirm dialog fires automatically for the DELETE call below.
     try {
       await usersApi.remove(u.id);
       notify('Deactivated', 'success');
       load();
     } catch (e) {
+      if (e?.cancelled) return;
       notify(e?.response?.data?.message || 'Failed', 'error');
     }
   };

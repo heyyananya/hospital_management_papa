@@ -22,3 +22,5 @@ const env = require('./src/config/env');
     process.exit(1);
   }
 })();
+// trigger nodemon restart
+

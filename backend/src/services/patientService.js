@@ -78,6 +78,13 @@ const createNewPatientWithVisit = async (body, user) => {
   ]);
   ensureMobile(body.mobile);
 
+  // The reception registers a new patient record (because we don't have them
+  // from the migrated legacy system) but the patient may be an OLD case in
+  // real life. `billCaseType` lets them mark that so the visit + auto-bill
+  // use the Old-case fee (₹200) instead of the New-case fee (₹400).
+  // Defaults to NEW for backward compatibility.
+  const billCaseType = body.billCaseType === 'OLD' ? 'OLD' : 'NEW';
+
   return withTx(async (client) => {
     const patientCode = await nextPatientCode(client);
     const { caseNumber, fyKey } = await nextCaseNumber(client);
@@ -104,20 +111,20 @@ const createNewPatientWithVisit = async (body, user) => {
     const { rows: vRows } = await client.query(
       `INSERT INTO patient_visits (
          case_number, fy_key, patient_id, visit_date, visit_time, case_type, created_by
-       ) VALUES ($1, $2, $3, CURRENT_DATE, CURRENT_TIME, 'NEW', $4)
+       ) VALUES ($1, $2, $3, CURRENT_DATE, CURRENT_TIME, $4, $5)
        RETURNING id, case_number AS "caseNumber", fy_key AS "fyKey",
                  visit_date AS "visitDate", visit_time AS "visitTime", status`,
-      [caseNumber, fyKey, patientId, user.id]
+      [caseNumber, fyKey, patientId, billCaseType, user.id]
     );
 
-    // Auto-charge the New Case fee from the service master (legacy table).
-    await billingService.autoAddCaseTypeCharge(client, vRows[0].id, 'NEW', user.id);
+    // Auto-charge the chosen case-type fee from the service master.
+    await billingService.autoAddCaseTypeCharge(client, vRows[0].id, billCaseType, user.id);
 
-    // Generate the official Auto Bill (BILL-YYYY-NNNNNN).
+    // Generate the official Auto Bill (BILL-YYYY-NNNNNN) at the same rate.
     const autoBill = await billsService.createAutoBillTx(client, {
       visitId: vRows[0].id,
       patientId,
-      caseType: 'NEW',
+      caseType: billCaseType,
       userId: user.id,
     });
 
@@ -141,6 +148,11 @@ const createNewPatientWithVisit = async (body, user) => {
 const createOldCaseVisit = async (patientId, demographics, user, opts = {}) => {
   const patient = await getById(patientId);
   const force = !!opts.force;
+  // Reception can override the bill rate per-visit. Default is Old Case
+  // (₹200) — the doctor may still want to charge New Case (₹400) if the
+  // patient hasn't been seen in a long time and this is effectively a
+  // fresh consultation.
+  const billCaseType = opts.billCaseType === 'NEW' ? 'NEW' : 'OLD';
 
   if (!force) {
     const { rows: existing } = await pool.query(
@@ -206,20 +218,20 @@ const createOldCaseVisit = async (patientId, demographics, user, opts = {}) => {
     const { rows } = await client.query(
       `INSERT INTO patient_visits (
          case_number, fy_key, patient_id, visit_date, visit_time, case_type, created_by
-       ) VALUES ($1, $2, $3, CURRENT_DATE, CURRENT_TIME, 'OLD', $4)
+       ) VALUES ($1, $2, $3, CURRENT_DATE, CURRENT_TIME, $4, $5)
        RETURNING id, case_number AS "caseNumber", fy_key AS "fyKey",
                  visit_date AS "visitDate", visit_time AS "visitTime", status`,
-      [caseNumber, fyKey, patient.id, user.id]
+      [caseNumber, fyKey, patient.id, billCaseType, user.id]
     );
 
-    // Auto-charge the Old Case consultation fee (legacy table).
-    await billingService.autoAddCaseTypeCharge(client, rows[0].id, 'OLD', user.id);
+    // Auto-charge the case-type consultation fee (New ₹400 or Old ₹200).
+    await billingService.autoAddCaseTypeCharge(client, rows[0].id, billCaseType, user.id);
 
-    // Generate the official Auto Bill (BILL-YYYY-NNNNNN).
+    // Generate the official Auto Bill (BILL-YYYY-NNNNNN) at the same rate.
     const autoBill = await billsService.createAutoBillTx(client, {
       visitId: rows[0].id,
       patientId: patient.id,
-      caseType: 'OLD',
+      caseType: billCaseType,
       userId: user.id,
     });
 

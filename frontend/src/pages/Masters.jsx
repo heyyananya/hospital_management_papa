@@ -79,12 +79,12 @@ export default function Masters() {
   };
 
   const remove = async (row) => {
-    if (!window.confirm(`Deactivate "${row.name || row.text || row.label}"?`)) return;
     try {
       await mastersApi.remove(def.key, row.id);
       notify('Deactivated', 'success');
       load();
     } catch (e) {
+      if (e?.cancelled) return;
       notify(e?.response?.data?.message || 'Failed', 'error');
     }
   };

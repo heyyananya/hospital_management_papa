@@ -22,8 +22,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box, Card, CardContent, Typography, Stack, Button, IconButton,
   CircularProgress, Alert, Divider, Chip, Tooltip, Table, TableHead,
-  TableRow, TableCell, TableBody,
+  TableRow, TableCell, TableBody, Autocomplete, TextField,
 } from '@mui/material';
+import MedicationOutlinedIcon from '@mui/icons-material/MedicationOutlined';
 import SaveIcon from '@mui/icons-material/Save';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -31,6 +32,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import dayjs from 'dayjs';
 
 import { ipdApi, settingsApi, mastersApi } from '../services/endpoints.js';
@@ -193,15 +195,67 @@ export default function IndoorSheet() {
     });
   };
 
+  /**
+   * Copy the medicine list from the previous day-block into this one. Saves
+   * reception from re-typing the whole regimen every morning when treatment
+   * is unchanged. Vitals and steam/chest-PT counters stay put — only the
+   * medicine table is affected. Anything already in this day's medicine
+   * table is overwritten by the previous day's list.
+   */
+  const copyMedsFromPrev = (idx) => {
+    if (idx <= 0) return;
+    setBlocks((prev) => {
+      const src = prev[idx - 1]?.medicineLines || [];
+      const filled = src.filter((l) => l.med || l.dose || l.route || l.freq);
+      if (filled.length === 0) {
+        notify('The previous day has no medicines to copy.', 'info');
+        return prev;
+      }
+      // Deep-copy each line so future edits on one day don't cross-mutate
+      // the other. Pad back up to the standard 15 rows so the table still
+      // renders cleanly.
+      const copied = padLines(src.map((l) => ({ ...l })));
+      const fromDate = dayjs(prev[idx - 1].readingDate).format('DD/MM/YY');
+      const toDate   = dayjs(prev[idx].readingDate).format('DD/MM/YY');
+      notify(`Copied ${filled.length} medicine(s) from ${fromDate} to ${toDate}.`, 'success');
+      return prev.map((b, i) => (i === idx ? { ...b, medicineLines: copied } : b));
+    });
+  };
+
+  /**
+   * Clear every medicine row for this day-block (empty table stays put so
+   * reception can start entering fresh entries). Vitals and counters stay
+   * — same "only medicines" scope as copyMedsFromPrev.
+   */
+  const clearMeds = (idx) => {
+    setBlocks((prev) => {
+      const target = prev[idx];
+      if (!target) return prev;
+      const hadAny = (target.medicineLines || []).some((l) =>
+        l.med || l.dose || l.route || l.freq);
+      if (!hadAny) {
+        notify('No medicines to clear on this day.', 'info');
+        return prev;
+      }
+      const dateLabel = dayjs(target.readingDate).format('DD/MM/YY');
+      notify(`Cleared all medicines from ${dateLabel}.`, 'success');
+      return prev.map((b, i) => (i === idx ? { ...b, medicineLines: blankLines() } : b));
+    });
+  };
+
   const removeBlock = async (idx) => {
     const b = blocks[idx];
-    if (blockHasContent(b) && !window.confirm(`Remove day ${dayjs(b.readingDate).format('DD/MM/YY')} from this admission's sheet? This deletes the day permanently.`)) {
+    // Empty blocks have nothing to delete server-side; skip the confirm hop
+    // by clearing them client-side straight away. Rows with real content
+    // trigger the global "Delete this record?" dialog from api.js.
+    if (!blockHasContent(b)) {
+      setBlocks((prev) => prev.filter((_, i) => i !== idx));
       return;
     }
-    // Delete the DB row (harmless if it doesn't exist yet).
     try {
       await ipdApi.indoorSheet.deleteDay(admissionId, b.readingDate);
     } catch (e) {
+      if (e?.cancelled) return;
       notify(e?.response?.data?.message || 'Delete failed', 'error');
       return;
     }
@@ -392,6 +446,9 @@ export default function IndoorSheet() {
                 onFieldChange={(u) => patch(idx, u)}
                 onLineChange={(lineIdx, key, value) => patchLine(idx, lineIdx, key, value)}
                 onRemove={() => removeBlock(idx)}
+                canCopyPrev={idx > 0}
+                onCopyPrevMeds={() => copyMedsFromPrev(idx)}
+                onClearMeds={() => clearMeds(idx)}
               />
             )
           ))}
@@ -429,7 +486,11 @@ function Field({ label, value, flex = 1 }) {
 
 /* ------------------------- Day block ------------------------- */
 
-function DayBlock({ block, index, dayNumber, disabled, medOptions = [], onFieldChange, onLineChange, onRemove }) {
+function DayBlock({
+  block, index, dayNumber, disabled, medOptions = [],
+  onFieldChange, onLineChange, onRemove,
+  canCopyPrev = false, onCopyPrevMeds, onClearMeds,
+}) {
   // Datalist IDs are scoped to this block so the dropdown doesn't get
   // confused when multiple day blocks are on the page at once.
   const medListId   = `med-opts-${index}`;
@@ -453,8 +514,34 @@ function DayBlock({ block, index, dayNumber, disabled, medOptions = [], onFieldC
           <Chip size="small" label="Outside admission window" variant="outlined" color="warning" />
         )}
         <Box sx={{ flex: 1 }} />
+        {!disabled && canCopyPrev && (
+          <Tooltip title="Copy every medicine row from the previous day into this one. Overwrites anything already in this day's medicine table.">
+            <Button
+              size="small"
+              variant="outlined"
+              color="primary"
+              startIcon={<ContentCopyIcon fontSize="small" />}
+              onClick={onCopyPrevMeds}
+            >
+              Copy Previous Day's Medicines
+            </Button>
+          </Tooltip>
+        )}
         {!disabled && (
-          <Tooltip title="Remove this day block">
+          <Tooltip title="Clear every medicine row from this day. Vitals and steam/chest-PT counters are kept.">
+            <Button
+              size="small"
+              variant="outlined"
+              color="warning"
+              startIcon={<DeleteOutlineIcon fontSize="small" />}
+              onClick={onClearMeds}
+            >
+              Clear Medicines
+            </Button>
+          </Tooltip>
+        )}
+        {!disabled && (
+          <Tooltip title="Remove this whole day block from the sheet">
             <IconButton size="small" onClick={onRemove} sx={{ color: 'error.main' }}>
               <DeleteOutlineIcon fontSize="small" />
             </IconButton>
@@ -490,8 +577,12 @@ function DayBlock({ block, index, dayNumber, disabled, medOptions = [], onFieldC
                   <TableRow key={li} hover>
                     <TableCell align="center" sx={{ color: 'text.secondary', fontSize: 12 }}>{li + 1}</TableCell>
                     <TableCell>
-                      <InputCell value={l.med}  disabled={disabled} full listId={medListId}
-                        onChange={(v) => onLineChange(li, 'med', v)} placeholder="e.g. Azithro 500" />
+                      <MedicineCell
+                        value={l.med}
+                        disabled={disabled}
+                        options={medOptions}
+                        onChange={(v) => onLineChange(li, 'med', v)}
+                      />
                     </TableCell>
                     <TableCell>
                       <InputCell value={l.dose} disabled={disabled} align="center" listId={doseListId}
@@ -511,10 +602,9 @@ function DayBlock({ block, index, dayNumber, disabled, medOptions = [], onFieldC
             </Table>
           </Box>
 
-          {/* Shared datalists — one per column, mounted once for the whole block. */}
-          <datalist id={medListId}>
-            {medOptions.map((n) => <option key={n} value={n} />)}
-          </datalist>
+          {/* Shared datalists for dose / route / freq (compact InputCells).
+              The Medicine column uses a proper MUI Autocomplete component
+              instead — see MedicineCell — so no datalist for it here. */}
           <datalist id={doseListId}>
             {DOSE_OPTIONS.map((d) => <option key={d} value={d} />)}
           </datalist>
@@ -758,6 +848,78 @@ function InputCell({ value, onChange, disabled, align = 'left', full = false, pl
       }}
       onFocus={(e) => { e.target.style.background = '#f0f7ff'; e.target.style.border = '1px solid #0d527e'; }}
       onBlur={(e)  => { e.target.style.background = 'transparent'; e.target.style.border = '1px solid transparent'; e.target.style.borderBottom = '1px solid #dfe3ea'; }}
+    />
+  );
+}
+
+/**
+ * Medicine picker for a single row of the medicines table. MUI Autocomplete
+ * gives a properly-styled, themed dropdown (light background, readable
+ * text) instead of the browser's native <datalist> chrome which shows up
+ * in a jarring dark colour on some OS themes. `freeSolo` keeps it flexible
+ * — reception can still type anything not in the master list.
+ */
+function MedicineCell({ value, onChange, disabled, options = [] }) {
+  return (
+    <Autocomplete
+      freeSolo
+      size="small"
+      disableClearable
+      value={value || ''}
+      options={options}
+      onChange={(_, v) => onChange(v ?? '')}
+      onInputChange={(_, v, reason) => {
+        // Only propagate free-typing; 'reset' fires after an option is picked
+        // and would echo the value back in a loop otherwise.
+        if (reason === 'input' || reason === 'clear') onChange(v ?? '');
+      }}
+      disabled={disabled}
+      slotProps={{
+        paper: {
+          sx: {
+            borderRadius: 1.5,
+            boxShadow: '0 12px 28px -12px rgba(15,23,42,0.25)',
+            border: '1px solid #e2e8f0',
+          },
+        },
+        listbox: {
+          sx: {
+            maxHeight: 300,
+            py: 0.5,
+            '& .MuiAutocomplete-option': {
+              fontSize: 13,
+              py: 0.75,
+              px: 1.25,
+              gap: 1,
+              '&[aria-selected="true"]': { bgcolor: 'rgba(11,122,74,0.10)' },
+              '&.Mui-focused':          { bgcolor: 'rgba(11,122,74,0.06)' },
+            },
+          },
+        },
+      }}
+      renderOption={(props, option) => (
+        <li {...props} key={option}>
+          <MedicationOutlinedIcon fontSize="small" sx={{ color: 'primary.main' }} />
+          <Typography variant="body2">{option}</Typography>
+        </li>
+      )}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          variant="standard"
+          placeholder="e.g. Azithro 500"
+          InputProps={{
+            ...params.InputProps,
+            disableUnderline: false,
+            sx: {
+              fontSize: 13,
+              px: 0.5,
+              '&:before': { borderBottomColor: '#dfe3ea' },
+              '& input': { py: '4px' },
+            },
+          }}
+        />
+      )}
     />
   );
 }

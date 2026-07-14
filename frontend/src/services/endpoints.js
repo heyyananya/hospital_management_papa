@@ -19,9 +19,14 @@ export const patientsApi = {
   history: (id)     => api.get(`/patients/${id}/history`).then((r) => r.data),
   createNew:    (data) => api.post('/patients', data).then((r) => r.data),
   // Pass `{ force: true }` to bypass the "already in queue today" 409.
+  // Pass `{ billCaseType: 'NEW' }` to charge this returning-patient visit at
+  // the New Case rate (₹400) instead of Old Case (₹200).
   createOldCase:(id, data, opts = {}) =>
-    api.post(`/patients/${id}/old-case`, { ...(data || {}), ...(opts.force ? { force: true } : {}) })
-       .then((r) => r.data),
+    api.post(`/patients/${id}/old-case`, {
+      ...(data || {}),
+      ...(opts.force ? { force: true } : {}),
+      ...(opts.billCaseType ? { billCaseType: opts.billCaseType } : {}),
+    }).then((r) => r.data),
   updateDemographics: (id, data) => api.put(`/patients/${id}/demographics`, data).then((r) => r.data),
   remove:  (id) => api.delete(`/patients/${id}`),
 };

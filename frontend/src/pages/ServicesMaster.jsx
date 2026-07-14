@@ -82,12 +82,12 @@ export default function ServicesMaster() {
       notify(`${row.code} is a system service - deactivate not allowed`, 'warning');
       return;
     }
-    if (!window.confirm(`Deactivate "${row.name}"?`)) return;
     try {
       await mastersApi.remove('service_master', row.id);
       notify('Deactivated', 'success');
       load();
     } catch (e) {
+      if (e?.cancelled) return;
       notify(e?.response?.data?.message || 'Failed', 'error');
     }
   };

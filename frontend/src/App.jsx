@@ -27,6 +27,7 @@ import DiseaseTemplates from './pages/DiseaseTemplates.jsx';
 import WardsAndBeds from './pages/WardsAndBeds.jsx';
 import PendingAdmissions from './pages/PendingAdmissions.jsx';
 import IpdPatients from './pages/IpdPatients.jsx';
+import DischargeQueue from './pages/DischargeQueue.jsx';
 import DischargedPatients from './pages/DischargedPatients.jsx';
 import IndoorSheet from './pages/IndoorSheet.jsx';
 import IndoorSheetRecent from './pages/IndoorSheetRecent.jsx';
@@ -188,6 +189,14 @@ export default function App() {
           element={
             <ProtectedRoute roles={['ADMIN', 'RECEPTIONIST']}>
               <IpdPatients />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="ipd/discharge-queue"
+          element={
+            <ProtectedRoute roles={['ADMIN', 'RECEPTIONIST']}>
+              <DischargeQueue />
             </ProtectedRoute>
           }
         />

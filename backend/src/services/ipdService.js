@@ -14,6 +14,7 @@ const { pool, withTx } = require('../config/db');
 const HttpError = require('../utils/HttpError');
 const { currentFY } = require('../utils/financialYear');
 const registerService = require('./registerService');
+const { nextCaseNumber } = require('../utils/idGenerator');
 
 /* ============================ WARDS ================================ */
 
@@ -73,6 +74,33 @@ const ensureBedsMigration = async () => {
   if (bedsMigrated) return;
   await pool.query(`ALTER TABLE beds DROP COLUMN IF EXISTS daily_rate`);
   bedsMigrated = true;
+};
+
+// One-shot reconciliation for legacy data written before the "closing the
+// source visit on admit" rule shipped. For every currently-ADMITTED
+// admission whose patient still has a WAITING_FOR_* visit, mark that visit
+// COMPLETED so the doctor queue matches the queue rules the UI documents.
+let admissionsBacklogRun = false;
+const ensureAdmissionsQueueCleanup = async () => {
+  if (admissionsBacklogRun) return;
+  try {
+    await pool.query(`
+      UPDATE patient_visits pv
+         SET status = 'COMPLETED',
+             updated_at = NOW()
+       WHERE pv.status IN ('WAITING_FOR_MEDICAL_OFFICER','WAITING_FOR_DOCTOR')
+         AND pv.deleted_at IS NULL
+         AND EXISTS (
+           SELECT 1 FROM admissions a
+            WHERE a.patient_id = pv.patient_id
+              AND a.status = 'ADMITTED'
+         )
+    `);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error('[ipd] admitted-visit backlog cleanup skipped:', e.message);
+  }
+  admissionsBacklogRun = true;
 };
 
 const beds = {
@@ -237,12 +265,22 @@ const admissions = {
     return admissions.getById(id);
   },
 
-  /** Reception assigns a free bed and locks the admission in. */
+  /**
+   * Reception assigns a free bed and locks the admission in.
+   *
+   * When the admission becomes ADMITTED we ALSO close any of the patient's
+   * still-open visits (MO or Doctor queue). Rationale: once the patient is
+   * in a ward they belong in the Discharge Queue, not the OPD queues. If we
+   * left the source doctor visit at WAITING_FOR_DOCTOR the same patient
+   * would appear in BOTH queues and cause double-work for the doctor.
+   *
+   * Anything already COMPLETED / CANCELLED is left untouched.
+   */
   assignBed: async (admissionId, { bedId }, user) => {
     if (!bedId) throw new HttpError(400, 'bedId is required');
     await withTx(async (client) => {
       const { rows: aRows } = await client.query(
-        `SELECT status FROM admissions WHERE id = $1 FOR UPDATE`, [admissionId]
+        `SELECT status, patient_id FROM admissions WHERE id = $1 FOR UPDATE`, [admissionId]
       );
       if (!aRows[0]) throw new HttpError(404, 'Admission not found');
       if (aRows[0].status !== 'REQUESTED') {
@@ -267,15 +305,38 @@ const admissions = {
       await client.query(
         `UPDATE beds SET status = 'OCCUPIED' WHERE id = $1`, [bedId]
       );
+
+      // Close any still-open MO/Doctor-queue visits for this patient so the
+      // Doctor Queue no longer lists someone who's now in a ward bed.
+      await client.query(
+        `UPDATE patient_visits
+            SET status = 'COMPLETED',
+                updated_at = NOW()
+          WHERE patient_id = $1
+            AND status IN ('WAITING_FOR_MEDICAL_OFFICER','WAITING_FOR_DOCTOR')
+            AND deleted_at IS NULL`,
+        [aRows[0].patient_id]
+      );
     });
     return admissions.getById(admissionId);
   },
 
-  /** Discharge an admitted patient — frees the bed and drops a 3C IPD row. */
+  /**
+   * Discharge an admitted patient:
+   *   1. Mark admission DISCHARGED, free the bed.
+   *   2. Create a NEW patient_visit (WAITING_FOR_DOCTOR) so the doctor can
+   *      do the discharge consultation from their queue. No auto-bill is
+   *      generated for this follow-up — reception adds charges manually if
+   *      the discharge visit needs to be billed.
+   *   3. Drop a 3C IPD register row.
+   *
+   * Returns the admission plus the id/case-number of the follow-up visit
+   * so the frontend can surface a "Sent to Doctor Queue as Case #N" toast.
+   */
   discharge: async (admissionId, { notes } = {}, user) => {
-    await withTx(async (client) => {
+    const result = await withTx(async (client) => {
       const { rows } = await client.query(
-        `SELECT status, bed_id FROM admissions WHERE id = $1 FOR UPDATE`,
+        `SELECT status, bed_id, patient_id FROM admissions WHERE id = $1 FOR UPDATE`,
         [admissionId]
       );
       if (!rows[0]) throw new HttpError(404, 'Admission not found');
@@ -296,6 +357,21 @@ const admissions = {
           `UPDATE beds SET status = 'FREE' WHERE id = $1`, [rows[0].bed_id]
         );
       }
+
+      // Create the discharge-follow-up visit straight in WAITING_FOR_DOCTOR
+      // (skip MO — the patient's already been in the ward, no fresh vitals
+      // needed). case_type = OLD because the patient is inside the system.
+      const { caseNumber, fyKey } = await nextCaseNumber(client);
+      const { rows: vRows } = await client.query(
+        `INSERT INTO patient_visits (
+           case_number, fy_key, patient_id, visit_date, visit_time,
+           case_type, status, created_by
+         ) VALUES ($1, $2, $3, CURRENT_DATE, CURRENT_TIME,
+                   'OLD', 'WAITING_FOR_DOCTOR', $4)
+         RETURNING id, case_number AS "caseNumber", fy_key AS "fyKey", status`,
+        [caseNumber, fyKey, rows[0].patient_id, user?.id || null]
+      );
+      return { followupVisit: vRows[0] };
     });
 
     const full = await admissions.getById(admissionId);
@@ -312,7 +388,7 @@ const admissions = {
       console.error('[ipd] failed to auto-create 3C IPD entry:', e.message);
     }
 
-    return full;
+    return { ...full, followupVisit: result.followupVisit };
   },
 
   /** Cancel a REQUESTED admission (before reception assigns a bed). */
@@ -333,6 +409,8 @@ const admissions = {
   },
 
   list: async ({ status, patientId } = {}) => {
+    // First-hit cleanup for legacy rows written before this rule shipped.
+    await ensureAdmissionsQueueCleanup();
     const where = []; const params = [];
     if (status)    { params.push(status);    where.push(`a.status = $${params.length}`); }
     if (patientId) { params.push(patientId); where.push(`a.patient_id = $${params.length}`); }

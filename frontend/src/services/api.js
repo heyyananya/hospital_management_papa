@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { bridge as confirmBridge } from '../context/ConfirmContext.jsx';
 
 /**
  * Single shared Axios instance.
@@ -37,9 +38,41 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+/**
+ * Global "Are you sure?" prompt for every PUT / DELETE.
+ *
+ * Add / read operations pass through untouched. Callers that already show a
+ * more specific confirmation (or that fire an update as a background
+ * side-effect) can bypass this by adding `{ skipConfirm: true }` to their
+ * axios config.
+ *
+ * When the user clicks Cancel we throw a lightweight tagged error so
+ * consumers can distinguish "user aborted" from a real network failure.
+ */
+export class ConfirmCancelledError extends Error {
+  constructor() { super('User cancelled the action'); this.name = 'ConfirmCancelledError'; this.cancelled = true; }
+}
+api.interceptors.request.use(async (config) => {
+  const method = (config.method || 'get').toLowerCase();
+  if (config.skipConfirm) return config;
+  if (method !== 'put' && method !== 'delete') return config;
+  const isDelete = method === 'delete';
+  const ok = await confirmBridge.confirm({
+    variant: isDelete ? 'delete' : 'update',
+    subject: config.confirmSubject,        // optional: page-provided context line
+  });
+  if (!ok) throw new ConfirmCancelledError();
+  return config;
+});
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    // Swallow "user cancelled the confirm dialog" — pages already show a
+    // dialog before firing, so a silent rejection is the friendly outcome.
+    if (err?.cancelled || err?.name === 'ConfirmCancelledError') {
+      return Promise.reject(err);
+    }
     if (err?.response?.status === 401) {
       const here = window.location.pathname;
       if (!here.includes('/login')) {

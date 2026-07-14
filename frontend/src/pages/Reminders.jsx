@@ -12,6 +12,7 @@ import {
 } from '@mui/material';
 import BoltIcon from '@mui/icons-material/Bolt';
 import HistoryIcon from '@mui/icons-material/History';
+import RepeatIcon from '@mui/icons-material/Repeat';
 import { DateCalendar, TimePicker } from '@mui/x-date-pickers';
 import dayjs from 'dayjs';
 import AddIcon from '@mui/icons-material/Add';
@@ -31,7 +32,29 @@ import { useSnackbar } from '../context/SnackbarContext.jsx';
 
 const isActive = (r) => {
   const now = dayjs();
+  // For recurring reminders, "active" is only true on a firing day. The
+  // authoritative check is server-side (bell / login popup uses /reminders
+  // ?active=1 which does the recurrence math in SQL); this client check
+  // just powers the row-highlight colour and is intentionally simple —
+  // recurring rows never highlight the whole month as "active".
+  if (r.recurrenceDayOfMonth) {
+    if (now.isBefore(dayjs(r.startsAt)) || now.isAfter(dayjs(r.endsAt))) return false;
+    const daysInMonth = now.daysInMonth();
+    const target = Math.min(r.recurrenceDayOfMonth, daysInMonth);
+    if (now.date() !== target) return false;
+    const startMonths = dayjs(r.startsAt).year() * 12 + dayjs(r.startsAt).month();
+    const nowMonths   = now.year() * 12 + now.month();
+    const step = Math.max(1, r.recurrenceEveryMonths || 1);
+    return ((nowMonths - startMonths) % step) === 0;
+  }
   return now.isAfter(dayjs(r.startsAt)) && now.isBefore(dayjs(r.endsAt));
+};
+
+const ordinal = (n) => {
+  const num = Number(n) || 0;
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = num % 100;
+  return num + (s[(v - 20) % 10] || s[v] || s[0]);
 };
 
 const formatRange = (start, end) => {
@@ -111,6 +134,10 @@ export default function Reminders() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(emptyForm());
+  const [recurringOpen, setRecurringOpen] = useState(false);
+  // When editing a RECURRING reminder we open the recurring dialog instead
+  // of the standard one — its fields don't fit the single-window form.
+  const [recurringEditing, setRecurringEditing] = useState(null);
   const { notify } = useSnackbar();
 
   const load = async () => {
@@ -131,6 +158,14 @@ export default function Reminders() {
     setOpen(true);
   };
   const openEdit = (r) => {
+    // Recurring reminders have their own dialog (typed dates, day-of-month,
+    // every-N-months). The regular form doesn't have those inputs so we
+    // route the two kinds to the right editor.
+    if (r.recurrenceDayOfMonth) {
+      setRecurringEditing(r);
+      setRecurringOpen(true);
+      return;
+    }
     setEditing(r);
     const targetRoles = Array.isArray(r.targetRoles) ? r.targetRoles : [];
     setForm({
@@ -171,12 +206,12 @@ export default function Reminders() {
   };
 
   const remove = async (r) => {
-    if (!window.confirm(`Delete reminder "${r.text.slice(0, 40)}…"?`)) return;
     try {
       await remindersApi.remove(r.id);
       notify('Reminder deleted', 'success');
       load();
     } catch (e) {
+      if (e?.cancelled) return;
       notify(e?.response?.data?.message || 'Delete failed', 'error');
     }
   };
@@ -208,9 +243,19 @@ export default function Reminders() {
     <Box>
       <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
         <Typography variant="h5">Reminders</Typography>
-        <Button onClick={openCreate} variant="contained" startIcon={<AddIcon />}>
-          Add Reminder
-        </Button>
+        <Stack direction="row" spacing={1}>
+          <Button
+            onClick={() => setRecurringOpen(true)}
+            variant="outlined"
+            color="secondary"
+            startIcon={<RepeatIcon />}
+          >
+            Monthly Reminder
+          </Button>
+          <Button onClick={openCreate} variant="contained" startIcon={<AddIcon />}>
+            Add Reminder
+          </Button>
+        </Stack>
       </Stack>
 
       <Card>
@@ -250,7 +295,14 @@ export default function Reminders() {
                           color: completed ? 'text.disabled' : 'text.primary',
                         }}>{r.text}</TableCell>
                         <TableCell>
-                          {r.type === 'LONG_TERM' ? (
+                          {r.recurrenceDayOfMonth ? (
+                            <Chip
+                              size="small"
+                              icon={<RepeatIcon />}
+                              label={`Monthly · ${ordinal(r.recurrenceDayOfMonth)}`}
+                              sx={{ bgcolor: '#ede7f6', color: '#4527a0', fontWeight: 600 }}
+                            />
+                          ) : r.type === 'LONG_TERM' ? (
                             <Chip size="small" icon={<HistoryIcon />} label="Long term"
                                   sx={{ bgcolor: '#ede7f6', color: '#3c3489', fontWeight: 600 }} />
                           ) : (
@@ -581,6 +633,290 @@ export default function Reminders() {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <RecurringReminderDialog
+        open={recurringOpen}
+        editing={recurringEditing}
+        onClose={() => { setRecurringOpen(false); setRecurringEditing(null); }}
+        onCreated={load}
+        notify={notify}
+      />
     </Box>
+  );
+}
+
+/* ================================================================
+                       Recurring reminder
+   ================================================================
+ * Batch-creates one reminder row per firing date. Fields:
+ *   - text            (name)
+ *   - visible-to      (Admin always + optional Reception / MO)
+ *   - start / end     (typed DD/MM/YYYY, no calendar popup)
+ *   - dayOfMonth      1..31 (auto-clamped for short months — Feb 30 → Feb 28/29)
+ *   - everyMonths     1..24 (repeat every N months)
+ *
+ * The generated dates are shown in a preview box so the admin can eyeball
+ * exactly what's going to be created before clicking Create.
+ */
+
+const parseDMY = (s) => {
+  // Strict DD/MM/YYYY parser — done by hand so we don't depend on the
+  // dayjs customParseFormat plugin (which isn't currently loaded). Accepts
+  // both "-" and "/" separators; four-digit year required.
+  if (!s || typeof s !== 'string') return null;
+  const m = s.trim().match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+  if (!m) return null;
+  const [_, dd, mm, yyyy] = m;
+  const d = dayjs(`${yyyy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`);
+  if (!d.isValid()) return null;
+  // Guard against out-of-range days like 32/13/2026 that ISO would silently coerce.
+  if (d.date() !== Number(dd) || (d.month() + 1) !== Number(mm)) return null;
+  return d.startOf('day');
+};
+
+const generateFirings = ({ start, end, dayOfMonth, everyMonths }) => {
+  if (!start || !end || !start.isValid() || !end.isValid()) return [];
+  if (end.isBefore(start)) return [];
+  const step = Math.max(1, parseInt(everyMonths, 10) || 1);
+  const dom  = Math.min(31, Math.max(1, parseInt(dayOfMonth, 10) || 1));
+  const dates = [];
+  // Start from the month of `start`; if that month's target day is before
+  // the start date, roll forward by `step`.
+  let cursor = start.date(1);       // first of the start month
+  for (let safety = 0; safety < 24 * 30 && dates.length < 60; safety++) {
+    const daysInMonth = cursor.daysInMonth();
+    const targetDay   = Math.min(dom, daysInMonth);   // Feb 30 → Feb 28/29
+    const firing      = cursor.date(targetDay).startOf('day');
+    if (firing.isAfter(end.endOf('day'))) break;
+    if (!firing.isBefore(start)) dates.push(firing);
+    cursor = cursor.add(step, 'month');
+  }
+  return dates;
+};
+
+function RecurringReminderDialog({ open, editing, onClose, onCreated, notify }) {
+  const [text, setText]         = useState('');
+  const [extraRoles, setExtra]  = useState([]);
+  const [startStr, setStartStr] = useState(dayjs().format('DD/MM/YYYY'));
+  const [endStr, setEndStr]     = useState(dayjs().add(1, 'year').format('DD/MM/YYYY'));
+  const [dayOfMonth, setDom]    = useState(5);
+  const [saving, setSaving]     = useState(false);
+  // Fires every month by default — matches "select the date of every month".
+  const everyMonths = 1;
+
+  // When opening: pre-fill from `editing` if present; otherwise reset to
+  // fresh values so an old edit doesn't leak into the next "new".
+  useEffect(() => {
+    if (!open) return;
+    if (editing) {
+      const roles = Array.isArray(editing.targetRoles) ? editing.targetRoles : [];
+      setText(editing.text || '');
+      setExtra(roles.filter((x) => x !== 'ADMIN'));
+      setStartStr(dayjs(editing.startsAt).format('DD/MM/YYYY'));
+      setEndStr(dayjs(editing.endsAt).format('DD/MM/YYYY'));
+      setDom(editing.recurrenceDayOfMonth || 5);
+    } else {
+      setText('');
+      setExtra([]);
+      setStartStr(dayjs().format('DD/MM/YYYY'));
+      setEndStr(dayjs().add(1, 'year').format('DD/MM/YYYY'));
+      setDom(5);
+    }
+  }, [open, editing]);
+
+  const startDate = parseDMY(startStr);
+  const endDate   = parseDMY(endStr);
+  const firings   = generateFirings({ start: startDate, end: endDate, dayOfMonth, everyMonths });
+
+  const dateErr = (!startDate || !endDate)
+    ? 'Enter both dates as DD/MM/YYYY'
+    : endDate.isBefore(startDate)
+      ? 'End date must be after the start date'
+      : null;
+
+  const save = async () => {
+    if (!text.trim()) return notify('Reminder name is required', 'error');
+    if (dateErr)      return notify(dateErr, 'error');
+    if (firings.length === 0) return notify('No firing dates fall inside this range', 'error');
+
+    setSaving(true);
+    try {
+      const payload = {
+        text: text.trim(),
+        type: 'LONG_TERM',
+        targetRoles: ['ADMIN', ...extraRoles],
+        startsAt: startDate.startOf('day').toISOString(),
+        endsAt:   endDate.endOf('day').toISOString(),
+        recurrenceDayOfMonth: dayOfMonth,
+        recurrenceEveryMonths: everyMonths,
+      };
+      if (editing) {
+        await remindersApi.update(editing.id, payload);
+        notify(
+          `Recurring reminder updated — fires on ${firings.length} date${firings.length === 1 ? '' : 's'}.`,
+          'success'
+        );
+      } else {
+        // ONE row per recurring template. The backend stores the rule
+        // (day-of-month + every-N-months) and evaluates "is it active today?"
+        // against it, so the reminders table stays uncluttered.
+        await remindersApi.create(payload);
+        notify(
+          `Recurring reminder saved — fires on ${firings.length} date${firings.length === 1 ? '' : 's'}.`,
+          'success'
+        );
+      }
+      onCreated?.();
+      onClose();
+    } catch (e) {
+      if (e?.cancelled) return;
+      notify(e?.response?.data?.message || 'Save failed', 'error');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle sx={{
+        display: 'flex', alignItems: 'center', gap: 1.5,
+        background: 'linear-gradient(135deg, #ede7f6 0%, #fff 70%)',
+        borderBottom: '1px solid #d1c4e9',
+      }}>
+        <RepeatIcon sx={{ color: '#673ab7' }} />
+        <Box>
+          <Typography variant="h6" sx={{ fontWeight: 700, lineHeight: 1.1 }}>
+            {editing ? 'Edit Monthly Reminder' : 'Monthly Reminder'}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Set once. Fires on the chosen day of every month between the start and end date.
+          </Typography>
+        </Box>
+      </DialogTitle>
+
+      <DialogContent dividers sx={{ p: 3 }}>
+        <Stack spacing={2.5}>
+          <TextField
+            label="Reminder name"
+            placeholder="e.g. Renew fire certificate, Pay AMC…"
+            fullWidth
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            autoFocus
+          />
+
+          {/* Visible to — same UX as the single-reminder dialog */}
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+              Visible to
+            </Typography>
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
+              <Chip size="small" label="Admin (always)"
+                    sx={{ bgcolor: '#e6f1fb', color: '#0c447c', fontWeight: 600 }} />
+              {ROLE_OPTIONS.map((opt) => {
+                const on = extraRoles.includes(opt.key);
+                return (
+                  <Chip
+                    key={opt.key}
+                    size="small"
+                    label={opt.label}
+                    onClick={() => setExtra(on
+                      ? extraRoles.filter((x) => x !== opt.key)
+                      : [...extraRoles, opt.key])}
+                    variant={on ? 'filled' : 'outlined'}
+                    sx={on
+                      ? { bgcolor: '#ede7f6', color: '#4527a0', borderColor: '#b39ddb', fontWeight: 600 }
+                      : { borderRadius: 999 }}
+                  />
+                );
+              })}
+            </Stack>
+          </Box>
+
+          {/* Date range — manual typed entry, no calendar popup */}
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+            <TextField
+              label="Start date"
+              placeholder="DD/MM/YYYY"
+              fullWidth
+              value={startStr}
+              onChange={(e) => setStartStr(e.target.value)}
+              helperText="Type the date, e.g. 01/08/2026"
+            />
+            <TextField
+              label="End date"
+              placeholder="DD/MM/YYYY"
+              fullWidth
+              value={endStr}
+              onChange={(e) => setEndStr(e.target.value)}
+              helperText="Type the date, e.g. 01/08/2028"
+            />
+          </Stack>
+
+          {/* Day of month — reminder fires on this day EVERY month between the range */}
+          <TextField
+            label="Day of every month"
+            type="number"
+            fullWidth
+            value={dayOfMonth}
+            onChange={(e) => setDom(e.target.value)}
+            inputProps={{ min: 1, max: 31 }}
+            helperText="1–31. On this day of every month between the start and end date, the reminder will pop up. Short months auto-clamp — Feb 30 → 28/29."
+          />
+
+          {/* Preview strip */}
+          <Paper
+            variant="outlined"
+            sx={{
+              p: 1.5, borderRadius: 2,
+              borderColor: dateErr ? '#f5c1c1' : '#c8b8ea',
+              bgcolor: dateErr ? '#fdf2f2' : '#faf7ff',
+            }}
+          >
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 0.75 }}>
+              <RepeatIcon fontSize="small" sx={{ color: dateErr ? '#a32d2d' : '#673ab7' }} />
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                {dateErr
+                  ? dateErr
+                  : `${firings.length} reminder${firings.length === 1 ? '' : 's'} will be created`}
+              </Typography>
+            </Stack>
+            {!dateErr && firings.length > 0 && (
+              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                {firings.slice(0, 24).map((d) => (
+                  <Chip
+                    key={d.toISOString()}
+                    size="small"
+                    label={d.format('DD MMM YYYY')}
+                    sx={{ bgcolor: '#ede7f6', color: '#4527a0' }}
+                  />
+                ))}
+                {firings.length > 24 && (
+                  <Chip size="small" label={`+${firings.length - 24} more`} variant="outlined" />
+                )}
+              </Stack>
+            )}
+          </Paper>
+        </Stack>
+      </DialogContent>
+
+      <DialogActions sx={{ p: 2 }}>
+        <Button onClick={onClose} disabled={saving}>Cancel</Button>
+        <Button
+          onClick={save}
+          variant="contained"
+          size="large"
+          color="secondary"
+          startIcon={<RepeatIcon />}
+          disabled={saving || !!dateErr || firings.length === 0 || !text.trim()}
+        >
+          {saving
+            ? <CircularProgress size={20} color="inherit" />
+            : editing
+              ? 'Save changes'
+              : `Create reminder · ${firings.length} firing${firings.length === 1 ? '' : 's'}`}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }

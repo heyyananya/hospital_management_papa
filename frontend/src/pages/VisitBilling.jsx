@@ -130,11 +130,11 @@ export default function VisitBilling() {
   };
 
   const removeCharge = async (id) => {
-    if (!window.confirm('Remove this charge?')) return;
     try {
       await billingApi.remove(id);
       reload();
     } catch (e) {
+      if (e?.cancelled) return;
       notify(e?.response?.data?.message || 'Failed to remove', 'error');
     }
   };

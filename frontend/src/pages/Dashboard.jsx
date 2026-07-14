@@ -16,6 +16,7 @@ import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlin
 
 import { dashboardApi } from '../services/endpoints.js';
 import { useSnackbar } from '../context/SnackbarContext.jsx';
+import { useAuth } from '../context/AuthContext.jsx';
 
 /* ============================ animations ============================ */
 const fadeUp = keyframes`
@@ -136,6 +137,10 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const { notify } = useSnackbar();
+  const { user } = useAuth();
+  // Admin-only stat tiles (Today / Overall). Reception and MO get the same
+  // welcome header + follow-ups list, minus the numbers.
+  const showStats = user?.role === 'ADMIN';
 
   useEffect(() => {
     dashboardApi.summary()
@@ -207,91 +212,96 @@ export default function Dashboard() {
         </Stack>
       </Box>
 
-      {/* ------ Today snapshot ------ */}
-      <Typography variant="overline" color="text.secondary" sx={{ pl: 0.5, letterSpacing: 1.2 }}>
-        TODAY
-      </Typography>
-      <Grid container spacing={2} sx={{ mt: 0.5 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="Today's Patients"
-            value={data?.todayTotal}
-            icon={<PeopleAltOutlinedIcon />}
-            gradient={GRADIENTS.green}
-            delay={0.0}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="Completed Today"
-            value={data?.todayCompleted}
-            icon={<CheckCircleOutlineIcon />}
-            gradient={GRADIENTS.emerald}
-            delay={0.08}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="Pending Today"
-            value={data?.todayPending}
-            icon={<HourglassEmptyIcon />}
-            gradient={GRADIENTS.amber}
-            delay={0.16}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="Waiting for Doctor"
-            value={data?.todayWaitingDoctor}
-            icon={<LocalHospitalOutlinedIcon />}
-            gradient={GRADIENTS.rose}
-            delay={0.24}
-          />
-        </Grid>
-      </Grid>
+      {/* ------ Today snapshot + Overall — ADMIN only ------
+          Reception and MO see the welcome banner and follow-ups list; the
+          summary numbers are the doctor's overview and stay admin-only. */}
+      {showStats && (
+        <>
+          <Typography variant="overline" color="text.secondary" sx={{ pl: 0.5, letterSpacing: 1.2 }}>
+            TODAY
+          </Typography>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="Today's Patients"
+                value={data?.todayTotal}
+                icon={<PeopleAltOutlinedIcon />}
+                gradient={GRADIENTS.green}
+                delay={0.0}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="Completed Today"
+                value={data?.todayCompleted}
+                icon={<CheckCircleOutlineIcon />}
+                gradient={GRADIENTS.emerald}
+                delay={0.08}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="Pending Today"
+                value={data?.todayPending}
+                icon={<HourglassEmptyIcon />}
+                gradient={GRADIENTS.amber}
+                delay={0.16}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="Waiting for Doctor"
+                value={data?.todayWaitingDoctor}
+                icon={<LocalHospitalOutlinedIcon />}
+                gradient={GRADIENTS.rose}
+                delay={0.24}
+              />
+            </Grid>
+          </Grid>
 
-      {/* ------ Overall ------ */}
-      <Typography variant="overline" color="text.secondary" sx={{ pl: 0.5, mt: 3, display: 'block', letterSpacing: 1.2 }}>
-        OVERALL
-      </Typography>
-      <Grid container spacing={2} sx={{ mt: 0.5 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="This Month"
-            value={data?.monthly}
-            icon={<CalendarMonthOutlinedIcon />}
-            gradient={GRADIENTS.teal}
-            delay={0.32}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label={data?.fyLabel || 'This FY'}
-            value={data?.fyCount}
-            icon={<CalendarMonthOutlinedIcon />}
-            gradient={GRADIENTS.teal}
-            delay={0.34}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="Total Patients"
-            value={data?.totalPatients}
-            icon={<GroupsOutlinedIcon />}
-            gradient={GRADIENTS.blue}
-            delay={0.40}
-          />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <GradientStat
-            label="Total Visits"
-            value={data?.totalVisits}
-            icon={<MedicalServicesOutlinedIcon />}
-            gradient={GRADIENTS.purple}
-            delay={0.48}
-          />
-        </Grid>
-      </Grid>
+          <Typography variant="overline" color="text.secondary" sx={{ pl: 0.5, mt: 3, display: 'block', letterSpacing: 1.2 }}>
+            OVERALL
+          </Typography>
+          <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="This Month"
+                value={data?.monthly}
+                icon={<CalendarMonthOutlinedIcon />}
+                gradient={GRADIENTS.teal}
+                delay={0.32}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label={data?.fyLabel || 'This FY'}
+                value={data?.fyCount}
+                icon={<CalendarMonthOutlinedIcon />}
+                gradient={GRADIENTS.teal}
+                delay={0.34}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="Total Patients"
+                value={data?.totalPatients}
+                icon={<GroupsOutlinedIcon />}
+                gradient={GRADIENTS.blue}
+                delay={0.40}
+              />
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <GradientStat
+                label="Total Visits"
+                value={data?.totalVisits}
+                icon={<MedicalServicesOutlinedIcon />}
+                gradient={GRADIENTS.purple}
+                delay={0.48}
+              />
+            </Grid>
+          </Grid>
+        </>
+      )}
 
       {/* ------ Follow-ups + Recent ------ */}
       <Grid container spacing={2} sx={{ mt: 1 }}>

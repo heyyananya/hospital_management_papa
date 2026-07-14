@@ -7,18 +7,28 @@ import {
 import { useNavigate, Link as RouterLink } from 'react-router-dom';
 import SearchIcon from '@mui/icons-material/Search';
 import HistoryIcon from '@mui/icons-material/History';
+import HowToRegIcon from '@mui/icons-material/HowToReg';
 
 import { patientsApi } from '../services/endpoints.js';
 import { useSnackbar } from '../context/SnackbarContext.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
+import BillRateSelector from '../components/BillRateSelector.jsx';
 
 export default function PatientSearch() {
   const [filters, setFilters] = useState({ mobile: '', name: '', patientCode: '' });
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState(null);
-  const [busy, setBusy] = useState(false);
+  // busyId: which row's Put-in-Queue click is mid-request. Also acts as a
+  // per-row disable so the reception can't double-fire the same row while
+  // the request is on the wire.
+  const [busyId, setBusyId] = useState(null);
+  // Duplicate-visit confirmation. Only shown when the backend refuses
+  // because the same patient already has an open visit today.
   const [dupDialog, setDupDialog] = useState(null); // { patient, existingVisit }
+  // Bill rate for the next Put-in-Queue click. Defaults to Old Case (this
+  // page is the returning-patient flow); reception can flip to New Case
+  // when the doctor wants a fresh consultation fee for a long-gap visit.
+  const [billCaseType, setBillCaseType] = useState('OLD');
   const { notify } = useSnackbar();
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -42,17 +52,18 @@ export default function PatientSearch() {
     }
   };
 
-  const startOldCase = async ({ force = false } = {}) => {
-    // `disabled={busy}` on the button already prevents a second click while
-    // the request is in flight — no extra short-circuit needed here.
-    setBusy(true);
+  // Single-click Put-in-Queue: takes the patient row and starts the Old Case
+  // visit directly, no intermediate confirmation dialog. Duplicate-visit
+  // guard still fires as a 409 → shows the dup dialog with an override.
+  const putInQueue = async (p, { force = false } = {}) => {
+    setBusyId(p.id);
     try {
-      const r = await patientsApi.createOldCase(selected.id, {}, { force });
+      const r = await patientsApi.createOldCase(p.id, {}, { force, billCaseType });
+      const rateLabel = billCaseType === 'NEW' ? 'New Case (₹400)' : 'Old Case (₹200)';
       notify(
-        `Case #${r.visit.caseNumber} created — ${selected.firstName} ${selected.surname} is now in the MO queue.`,
+        `Case #${r.visit.caseNumber} created — ${p.firstName} ${p.surname} is now in the MO queue. Billed as ${rateLabel}.`,
         'success'
       );
-      setSelected(null);
       setDupDialog(null);
       // Reception → billing next; other roles → their queue.
       if (user?.role === 'RECEPTIONIST') {
@@ -63,20 +74,19 @@ export default function PatientSearch() {
     } catch (e) {
       if (e?.response?.status === 409 && e.response.data?.details?.existingVisit) {
         setDupDialog({
-          patient: selected,
+          patient: p,
           existingVisit: e.response.data.details.existingVisit,
         });
       } else {
         notify(e?.response?.data?.message || 'Failed to create visit', 'error');
       }
     } finally {
-      setBusy(false);
+      setBusyId(null);
     }
   };
 
   const openExistingVisit = (existingVisit) => {
     setDupDialog(null);
-    setSelected(null);
     if (user?.role === 'RECEPTIONIST') {
       navigate(`/visits/${existingVisit.id}/billing`);
     } else if (existingVisit.status === 'WAITING_FOR_DOCTOR') {
@@ -86,14 +96,21 @@ export default function PatientSearch() {
     }
   };
 
-  const startNewCase = () => {
-    setSelected(null);
-    navigate('/patients/new');
-  };
-
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 2 }}>Patient Search</Typography>
+
+      <BillRateSelector
+        value={billCaseType}
+        onChange={setBillCaseType}
+        label="Put next patient in queue as"
+        hint={
+          <>Applies to the next <b>Put in Queue</b> click. Flip to <b>New Case</b>
+          when a long-gap returning patient is effectively a fresh consult.</>
+        }
+        sx={{ mb: 2 }}
+      />
+
       <Card sx={{ mb: 2 }}>
         <CardContent>
           <Grid container spacing={2} alignItems="center">
@@ -146,9 +163,20 @@ export default function PatientSearch() {
                       <IconButton component={RouterLink} to={`/patients/${p.id}/history`} title="History">
                         <HistoryIcon />
                       </IconButton>
-                      {/* All three roles can select a returning patient and put them into the queue. */}
-                      <Button size="small" variant="outlined" onClick={() => setSelected(p)} sx={{ ml: 1 }}>
-                        Select
+                      {/* One click straight into the MO queue — the earlier
+                          two-step Select→confirm dialog was slowing reception
+                          down without adding safety (the 409 dup guard covers
+                          the accidental-double-visit case). */}
+                      <Button
+                        size="small"
+                        variant="contained"
+                        startIcon={busyId === p.id ? null : <HowToRegIcon />}
+                        disabled={busyId === p.id}
+                        onClick={() => putInQueue(p)}
+                        sx={{ ml: 1 }}
+                        title="Create today's visit and add to MO queue"
+                      >
+                        {busyId === p.id ? <CircularProgress size={16} color="inherit" /> : 'Put in Queue'}
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -160,27 +188,6 @@ export default function PatientSearch() {
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={!!selected} onClose={() => setSelected(null)} maxWidth="sm" fullWidth>
-        <DialogTitle>Patient Found</DialogTitle>
-        <DialogContent dividers>
-          {selected && (
-            <Stack spacing={1.2}>
-              <Box><b>Patient ID:</b> {selected.patientCode}</Box>
-              <Box><b>Name:</b> {[selected.firstName, selected.middleName, selected.surname].filter(Boolean).join(' ')}</Box>
-              <Box><b>Village:</b> {selected.village}</Box>
-              <Box><b>Mobile:</b> {selected.mobile}</Box>
-              <Box><b>Last Visit:</b> {selected.lastVisit ? new Date(selected.lastVisit).toLocaleDateString('en-IN') : '—'}</Box>
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions sx={{ p: 2 }}>
-          <Button onClick={startNewCase} disabled={busy}>New Case</Button>
-          <Button variant="contained" onClick={() => startOldCase()} disabled={busy}>
-            {busy ? <CircularProgress size={18} color="inherit" /> : 'Old Case (New Visit)'}
-          </Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Duplicate-visit-today confirmation (same UX as the Register Patient page). */}
       <Dialog
@@ -224,11 +231,11 @@ export default function PatientSearch() {
             Open existing
           </Button>
           <Button
-            onClick={() => startOldCase({ force: true })}
+            onClick={() => dupDialog && putInQueue(dupDialog.patient, { force: true })}
             color="warning"
-            disabled={busy}
+            disabled={busyId === dupDialog?.patient?.id}
           >
-            {busy ? <CircularProgress size={16} /> : 'Create another visit'}
+            {busyId === dupDialog?.patient?.id ? <CircularProgress size={16} /> : 'Create another visit'}
           </Button>
         </DialogActions>
       </Dialog>

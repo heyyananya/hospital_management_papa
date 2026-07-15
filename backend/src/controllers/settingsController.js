@@ -37,11 +37,20 @@ exports.uploadLogo = asyncHandler(async (req, res) => {
   res.json({ ok: true });
 });
 
-// Serve the logo (small, browser-friendly).
+// Serve the logo. Cached for 5 minutes so the login page (which mounts two
+// logo <img> tags) doesn't refetch on every render — the previous no-cache
+// policy caused the visible flicker where the logo would disappear until
+// the user hit refresh 2-3 times. Uploads bust the cache via a `?v=` query
+// param generated at upload time on the frontend.
 exports.getLogo = asyncHandler(async (_req, res) => {
   if (!fs.existsSync(LOGO_PATH)) return res.status(404).end();
+  const stat = fs.statSync(LOGO_PATH);
+  const etag = `W/"logo-${stat.size}-${stat.mtimeMs}"`;
   res.setHeader('Content-Type', 'image/png');
-  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.setHeader('ETag', etag);
+  // If the browser already has this version, skip re-sending the bytes.
+  if (_req.headers['if-none-match'] === etag) return res.status(304).end();
   fs.createReadStream(LOGO_PATH).pipe(res);
 });
 

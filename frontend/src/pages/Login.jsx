@@ -16,6 +16,9 @@ import LockOutlinedIcon from '@mui/icons-material/LockOutlined';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CheckIcon from '@mui/icons-material/Check';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 import { useAuth } from '../context/AuthContext.jsx';
 import { settingsApi } from '../services/endpoints.js';
@@ -86,6 +89,84 @@ const glowPulse = keyframes`
   50%      { box-shadow: 0 14px 32px -10px rgba(11,122,74,0.55),
                         0 10px 24px -10px rgba(75,63,179,0.45),
                         0 0 0 12px rgba(11,122,74,0.08); }
+`;
+// Wrong-password shake — punchier, tighter timing. Combines translateX
+// with a very small rotate so it feels like a physical "no" head-shake
+// rather than a pure slide. Runs once per failed submit.
+const shakeX = keyframes`
+  0%, 100% { transform: translateX(0) rotate(0); }
+  10%      { transform: translateX(-12px) rotate(-0.6deg); }
+  25%      { transform: translateX(11px)  rotate( 0.6deg); }
+  40%      { transform: translateX(-9px)  rotate(-0.4deg); }
+  55%      { transform: translateX(7px)   rotate( 0.4deg); }
+  70%      { transform: translateX(-5px)  rotate(-0.2deg); }
+  85%      { transform: translateX(3px)   rotate( 0.15deg); }
+`;
+// Full-panel red flash overlay on failed login.
+const errorFlash = keyframes`
+  0%   { opacity: 0; }
+  25%  { opacity: 1; }
+  100% { opacity: 0; }
+`;
+// Soft red glow that fades in behind the form panel when the login fails
+// — reads as a warning tint without covering anything.
+const errorGlow = keyframes`
+  0%   { opacity: 0; }
+  30%  { opacity: 1; }
+  100% { opacity: 0; }
+`;
+// Error alert enters with a mini shake + drop-in so the message itself
+// visibly reacts, not just the surrounding form.
+const alertShakeIn = keyframes`
+  0%   { opacity: 0; transform: translateY(-14px) scale(0.96); }
+  30%  { opacity: 1; transform: translateY(0)     scale(1); }
+  45%  { transform: translateX(-6px); }
+  60%  { transform: translateX(5px); }
+  75%  { transform: translateX(-3px); }
+  90%  { transform: translateX(1px); }
+  100% { transform: translateX(0); }
+`;
+// Big red circle badge that pops next to the alert on error.
+const badgePop = keyframes`
+  0%   { opacity: 0; transform: scale(0); }
+  60%  { opacity: 1; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
+`;
+// Success celebration — a soft green glow that grows then fades out.
+const successBloom = keyframes`
+  0%   { opacity: 0; transform: scale(0.6); }
+  40%  { opacity: 1; transform: scale(1.05); }
+  100% { opacity: 0; transform: scale(1.6); }
+`;
+// Check-mark scale-in — bouncy pop.
+const checkPop = keyframes`
+  0%   { opacity: 0; transform: scale(0);   }
+  60%  { opacity: 1; transform: scale(1.25); }
+  100% { opacity: 1; transform: scale(1);   }
+`;
+// Radial confetti ring that expands outward on success.
+const ringExpand = keyframes`
+  0%   { opacity: 0.9; transform: scale(0.4); border-width: 6px; }
+  100% { opacity: 0;   transform: scale(2.2); border-width: 1px; }
+`;
+// SVG stroke-draw for the check mark — dash-based reveal that looks like
+// it's being handwritten. `pathLength=100` on the <path> normalises the
+// dash math so the values below are portable.
+const drawCheck = keyframes`
+  from { stroke-dashoffset: 100; }
+  to   { stroke-dashoffset: 0; }
+`;
+// Slide down + fade in from above — used for the success panel that
+// overlays the form.
+const dropIn = keyframes`
+  from { opacity: 0; transform: translateY(-16px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)      scale(1); }
+`;
+// Angry red pulse for the button on wrong-password submit.
+const errorPulse = keyframes`
+  0%   { box-shadow: 0 0 0 0 rgba(211,47,47, 0.55); }
+  70%  { box-shadow: 0 0 0 14px rgba(211,47,47, 0);   }
+  100% { box-shadow: 0 0 0 0 rgba(211,47,47, 0);   }
 `;
 
 /* ============================== features ============================ */
@@ -203,6 +284,11 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [showPwd, setShowPwd] = useState(false);
+  // Animation flags. `outcome` drives the celebratory / rejection overlay;
+  // `shakeKey` bumps on each failed submit so the shake animation restarts
+  // (re-setting the same value wouldn't retrigger the CSS animation).
+  const [outcome, setOutcome] = useState(null); // 'success' | 'error' | null
+  const [shakeKey, setShakeKey] = useState(0);
   const { register, handleSubmit, formState: { errors } } = useForm();
 
   // Subtle mouse parallax on the brand panel orbs.
@@ -220,18 +306,31 @@ export default function Login() {
   };
   const onMouseLeave = () => setPxy({ x: 0, y: 0 });
 
-  if (user) return <Navigate to="/" replace />;
+  // If auth already flipped, respect the redirect — UNLESS we're mid
+  // success animation. Skipping the early return for ~1s lets the button's
+  // success state actually render before the dashboard mounts.
+  if (user && outcome !== 'success') return <Navigate to="/" replace />;
 
   const onSubmit = async (data) => {
     setError(null);
+    setOutcome(null);
     setSubmitting(true);
     try {
       await login(data.username.trim(), data.password);
-      navigate('/', { replace: true });
+      // Show the "Login Successful" panel for ~1.6s so the user clearly
+      // sees the confirmation before the dashboard swaps in. The auth
+      // state has already flipped — the guard in the early return keeps
+      // <Navigate> from firing prematurely.
+      setOutcome('success');
+      setTimeout(() => navigate('/', { replace: true }), 1600);
     } catch (e) {
       setError(e?.response?.data?.message || 'Login failed');
-    } finally {
+      setOutcome('error');
+      setShakeKey((k) => k + 1);          // restart the shake keyframe
       setSubmitting(false);
+      // Clear the error state after the animation finishes so a retry
+      // starts from a clean slate.
+      setTimeout(() => setOutcome(null), 1400);
     }
   };
 
@@ -431,7 +530,17 @@ export default function Login() {
                   component="img"
                   src={settingsApi.logoUrl()}
                   alt="FEFSA"
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  loading="eager"
+                  decoding="async"
+                  // Retry once on transient failure; only hide the element
+                  // if that retry also fails. Previously a single hiccup
+                  // stuck the logo in display:none until a hard reload.
+                  onError={(e) => {
+                    const img = e.currentTarget;
+                    if (img.dataset.retried) { img.style.visibility = 'hidden'; return; }
+                    img.dataset.retried = '1';
+                    img.src = `/api/settings/logo?retry=${Date.now()}`;
+                  }}
                   sx={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
               </Box>
@@ -524,6 +633,84 @@ export default function Login() {
                 'radial-gradient(500px 300px at 0% 100%, rgba(75,63,179,0.06), transparent 60%)',
             }} />
 
+            {/* ============ Login Successful overlay ============
+                Only renders after a successful auth. Covers the form panel
+                (not the whole page) with a soft mint frost, then draws an
+                animated check mark, then the "Login Successful" heading,
+                then the "Redirecting to dashboard…" subline with a small
+                spinner. Stays for ~1.6s before onSubmit navigates away. */}
+            {outcome === 'success' && (
+              <Box sx={{
+                position: 'absolute', inset: 0, zIndex: 5,
+                bgcolor: 'rgba(255,255,255,0.96)',
+                backdropFilter: 'blur(6px)',
+                WebkitBackdropFilter: 'blur(6px)',
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center',
+                animation: `${dropIn} 0.35s ease-out forwards`,
+              }}>
+                {/* Soft ambient green glow behind the check */}
+                <Box sx={{
+                  position: 'absolute',
+                  width: 300, height: 300, borderRadius: '50%',
+                  background: 'radial-gradient(circle, rgba(11,122,74,0.20), transparent 65%)',
+                  filter: 'blur(12px)',
+                }} />
+                {/* Expanding shockwave ring — quiet, single */}
+                <Box sx={{
+                  position: 'absolute',
+                  width: 140, height: 140, borderRadius: '50%',
+                  border: '3px solid #0b7a4a',
+                  animation: `${ringExpand} 1s ease-out 0.15s forwards`,
+                  opacity: 0,
+                }} />
+                {/* Circle with a solid check — icon pops in with a bouncy
+                    scale so it's clearly visible. Reliable across browsers
+                    (previous SVG stroke-draw missed on some machines). */}
+                <Box sx={{
+                  position: 'relative',
+                  width: 108, height: 108, borderRadius: '50%',
+                  bgcolor: '#0b7a4a',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  boxShadow: '0 22px 44px -14px rgba(11,122,74,0.55)',
+                  animation: `${checkPop} 0.5s cubic-bezier(.34,1.56,.64,1) forwards`,
+                }}>
+                  <CheckIcon
+                    sx={{
+                      fontSize: 68,
+                      color: '#fff',
+                      strokeWidth: 3,
+                      transform: 'scale(0)',
+                      animation: `${checkPop} 0.4s cubic-bezier(.34,1.56,.64,1) 0.25s forwards`,
+                    }}
+                  />
+                </Box>
+
+                <Typography sx={{
+                  mt: 3, fontWeight: 900, fontSize: 26, color: '#0b7a4a',
+                  letterSpacing: 0.4,
+                  animation: `${fadeUp} 0.5s ease-out 0.35s both`,
+                }}>
+                  Login Successful
+                </Typography>
+                <Typography sx={{
+                  mt: 0.75, color: 'text.secondary', fontSize: 14,
+                  animation: `${fadeUp} 0.5s ease-out 0.55s both`,
+                }}>
+                  Welcome back — taking you to your dashboard…
+                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{
+                  mt: 1.5,
+                  animation: `${fadeUp} 0.5s ease-out 0.75s both`,
+                }}>
+                  <CircularProgress size={16} thickness={5} sx={{ color: '#0b7a4a' }} />
+                  <Typography variant="caption" color="text.secondary" sx={{ letterSpacing: 0.5 }}>
+                    Redirecting…
+                  </Typography>
+                </Stack>
+              </Box>
+            )}
+
             {/* Mobile-only mini brand strip */}
             <Stack
               direction="row"
@@ -546,7 +733,17 @@ export default function Login() {
                   component="img"
                   src={settingsApi.logoUrl()}
                   alt="FEFSA"
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                  loading="eager"
+                  decoding="async"
+                  // Retry once on transient failure; only hide the element
+                  // if that retry also fails. Previously a single hiccup
+                  // stuck the logo in display:none until a hard reload.
+                  onError={(e) => {
+                    const img = e.currentTarget;
+                    if (img.dataset.retried) { img.style.visibility = 'hidden'; return; }
+                    img.dataset.retried = '1';
+                    img.src = `/api/settings/logo?retry=${Date.now()}`;
+                  }}
                   sx={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
               </Box>
@@ -583,16 +780,57 @@ export default function Login() {
               </Typography>
             </Box>
 
+            {/* Red warning glow behind the form — soft pulse that fades
+                after the animation window. Signals "something went wrong"
+                even before the eye lands on the specific error text. */}
+            {outcome === 'error' && (
+              <Box sx={{
+                position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 0,
+                background:
+                  'radial-gradient(600px 300px at 50% 40%, rgba(211,47,47,0.16), transparent 65%)',
+                animation: `${errorGlow} 1.4s ease-out forwards`,
+              }} />
+            )}
+
             {error && (
               <Alert
+                key={`err-${shakeKey}`}   // remount → replay animation each attempt
                 severity="error"
-                sx={{ mb: 2, borderRadius: 2, animation: `${fadeUp} .35s ease-out`, position: 'relative' }}
+                variant="filled"
+                icon={
+                  <Box sx={{
+                    display: 'inline-flex',
+                    animation: `${badgePop} 0.45s cubic-bezier(.34,1.56,.64,1) both`,
+                  }}>
+                    <ErrorOutlineIcon fontSize="small" />
+                  </Box>
+                }
+                sx={{
+                  mb: 2, borderRadius: 2, position: 'relative',
+                  fontWeight: 600, letterSpacing: 0.2,
+                  animation: `${alertShakeIn} 0.65s cubic-bezier(.36,.07,.19,.97) both`,
+                  boxShadow: '0 14px 30px -14px rgba(211,47,47,0.55)',
+                  bgcolor: '#d32f2f',
+                }}
               >
                 {error}
               </Alert>
             )}
 
-            <Box component="form" onSubmit={handleSubmit(onSubmit)} noValidate sx={{ position: 'relative' }}>
+            <Box
+              component="form"
+              onSubmit={handleSubmit(onSubmit)}
+              noValidate
+              // key = shakeKey forces React to remount, which restarts the
+              // CSS animation cleanly for each new wrong-password attempt.
+              key={`login-form-${shakeKey}`}
+              sx={{
+                position: 'relative',
+                animation: outcome === 'error'
+                  ? `${shakeX} 0.55s cubic-bezier(.36,.07,.19,.97) both`
+                  : 'none',
+              }}
+            >
               <FieldLabel htmlFor="login-username">Username</FieldLabel>
               <TextField
                 id="login-username"
@@ -649,12 +887,22 @@ export default function Login() {
                 {...register('password', { required: 'Password is required' })}
               />
 
+              {/* The button morphs to reflect state: default = brand
+                  gradient, submitting = same but disabled + spinner, success
+                  = solid green with a check + toast text, error = the form
+                  around it shakes (see the wrapping <Box>). Keeps the
+                  entire feedback in one focal point instead of a full-page
+                  celebration. */}
               <Button
                 type="submit"
                 fullWidth
                 size="large"
-                disabled={submitting}
-                endIcon={!submitting && <ArrowForwardIcon className="signinArrow" />}
+                disabled={submitting || outcome === 'success'}
+                endIcon={
+                  outcome === 'success'
+                    ? <CheckCircleIcon sx={{ fontSize: 22 }} />
+                    : (!submitting && <ArrowForwardIcon className="signinArrow" />)
+                }
                 sx={{
                   mt: 3.5,
                   py: 1.7,
@@ -665,22 +913,29 @@ export default function Login() {
                   borderRadius: 3,
                   position: 'relative',
                   overflow: 'hidden',
-                  background:
-                    'linear-gradient(90deg, #0b7a4a 0%, #1e7fb0 50%, #4b3fb3 100%)',
+                  background: outcome === 'success'
+                    ? 'linear-gradient(90deg, #0b7a4a, #0f9a6a)'
+                    : outcome === 'error'
+                      ? 'linear-gradient(90deg, #b71c1c 0%, #d32f2f 50%, #b71c1c 100%)'
+                      : 'linear-gradient(90deg, #0b7a4a 0%, #1e7fb0 50%, #4b3fb3 100%)',
                   backgroundSize: '200% auto',
-                  animation: `${glowPulse} 3.6s ease-in-out infinite, ${fadeUp} .55s ease-out forwards`,
-                  animationDelay: '0s, .45s',
+                  animation: outcome === 'success'
+                    ? `${fadeUp} .55s ease-out forwards`
+                    : outcome === 'error'
+                      ? `${errorPulse} 1.4s ease-out forwards, ${fadeUp} .55s ease-out forwards`
+                      : `${glowPulse} 3.6s ease-in-out infinite, ${fadeUp} .55s ease-out forwards`,
+                  animationDelay: outcome ? '0s' : '0s, .45s',
                   opacity: 0,
                   transition:
-                    'background-position .6s ease, transform .2s ease, box-shadow .3s ease, opacity .5s ease',
+                    'background 0.4s ease, background-position .6s ease, transform .2s ease, box-shadow .3s ease, opacity .5s ease',
                   '&:hover': {
                     backgroundPosition: 'right center',
-                    transform: 'translateY(-2px)',
+                    transform: outcome ? 'none' : 'translateY(-2px)',
                   },
                   '&:hover .signinArrow': { transform: 'translateX(4px)' },
                   '& .signinArrow': { transition: 'transform .25s ease' },
                   '&:active': { transform: 'translateY(0) scale(0.99)' },
-                  '&::after': {
+                  '&::after': outcome === 'success' ? {} : {
                     content: '""',
                     position: 'absolute',
                     inset: 0,
@@ -690,14 +945,25 @@ export default function Login() {
                     animation: `${shimmer} 3.2s linear infinite`,
                     pointerEvents: 'none',
                   },
+                  // Success state keeps a colored disabled look — same green,
+                  // full-opacity — so it doesn't fade to the muted grey.
                   '&.Mui-disabled': {
-                    color: 'rgba(255,255,255,0.9)',
-                    background: 'linear-gradient(90deg, #9ec6b6, #a8c2db, #b9b3df)',
+                    color: outcome === 'success' ? '#fff' : 'rgba(255,255,255,0.9)',
+                    background: outcome === 'success'
+                      ? 'linear-gradient(90deg, #0b7a4a, #0f9a6a)'
+                      : 'linear-gradient(90deg, #9ec6b6, #a8c2db, #b9b3df)',
                     animation: 'none',
+                    boxShadow: outcome === 'success'
+                      ? '0 14px 32px -10px rgba(11,122,74,0.65)'
+                      : 'none',
                   },
                 }}
               >
-                {submitting ? <CircularProgress size={22} color="inherit" /> : 'Sign In'}
+                {outcome === 'success'
+                  ? 'Signed in — redirecting…'
+                  : submitting
+                    ? <CircularProgress size={22} color="inherit" />
+                    : 'Sign In'}
               </Button>
             </Box>
 

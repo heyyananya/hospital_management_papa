@@ -57,6 +57,40 @@ const ordinal = (n) => {
   return num + (s[(v - 20) % 10] || s[v] || s[0]);
 };
 
+// Returns the next FUTURE firing date for a recurring reminder (as a dayjs
+// object), or null if there are no more firings before endsAt. Today's
+// firing counts as "future" until end-of-day.
+const nextFiringOf = (r) => {
+  if (!r?.recurrenceDayOfMonth) return null;
+  const start = dayjs(r.startsAt).startOf('day');
+  const end   = dayjs(r.endsAt).endOf('day');
+  const step  = Math.max(1, r.recurrenceEveryMonths || 1);
+  const dom   = r.recurrenceDayOfMonth;
+  const now   = dayjs();
+
+  // Start walking from the greater of (start month, current month), aligned
+  // to the interval so we never land on a non-matching month.
+  let cursor = start.date(1);
+  const monthsFromStartToNow =
+    (now.year() * 12 + now.month()) - (start.year() * 12 + start.month());
+  if (monthsFromStartToNow > 0) {
+    const alignedGap = Math.ceil(monthsFromStartToNow / step) * step;
+    cursor = cursor.add(alignedGap, 'month');
+  }
+  for (let safety = 0; safety < 24 * 30; safety++) {
+    const daysInMonth = cursor.daysInMonth();
+    const target = Math.min(dom, daysInMonth);
+    const firing = cursor.date(target).endOf('day');   // "today counts" ends at 23:59
+    if (firing.isAfter(end)) return null;
+    if (firing.isBefore(now)) {
+      cursor = cursor.add(step, 'month');
+      continue;
+    }
+    return firing.startOf('day');
+  }
+  return null;
+};
+
 const formatRange = (start, end) => {
   const s = dayjs(start).format('DD MMM YY, HH:mm');
   const e = dayjs(end).format('DD MMM YY, HH:mm');
@@ -330,22 +364,46 @@ export default function Reminders() {
                         </TableCell>
                         <TableCell>{formatRange(r.startsAt, r.endsAt)}</TableCell>
                         <TableCell>
-                          {completed ? (
-                            <Tooltip title={r.completedByName ? `Completed by ${r.completedByName}` : 'Completed'}>
-                              <Chip
-                                size="small"
-                                color="success"
-                                icon={<CheckCircleIcon />}
-                                label={`Completed ${dayjs(r.completedAt).format('DD MMM, HH:mm')}`}
-                              />
-                            </Tooltip>
-                          ) : active ? (
-                            <Chip size="small" color="warning" icon={<NotificationsActiveIcon />} label="Active" />
-                          ) : dayjs().isBefore(dayjs(r.startsAt)) ? (
-                            <Chip size="small" label="Scheduled" />
-                          ) : (
-                            <Chip size="small" variant="outlined" label="Past" />
-                          )}
+                          {(() => {
+                            if (completed) {
+                              return (
+                                <Tooltip title={r.completedByName ? `Completed by ${r.completedByName}` : 'Completed'}>
+                                  <Chip
+                                    size="small"
+                                    color="success"
+                                    icon={<CheckCircleIcon />}
+                                    label={`Completed ${dayjs(r.completedAt).format('DD MMM, HH:mm')}`}
+                                  />
+                                </Tooltip>
+                              );
+                            }
+                            if (active) {
+                              return <Chip size="small" color="warning"
+                                icon={<NotificationsActiveIcon />} label="Active" />;
+                            }
+                            // Recurring: prefer a "next firing" chip over the
+                            // old before-startsAt / after-endsAt logic.
+                            if (r.recurrenceDayOfMonth) {
+                              const next = nextFiringOf(r);
+                              if (next) {
+                                return (
+                                  <Tooltip title={`Next reminder on ${next.format('dddd, DD MMM YYYY')}`}>
+                                    <Chip
+                                      size="small"
+                                      icon={<RepeatIcon />}
+                                      label={`Next: ${next.format('DD MMM YY')}`}
+                                      sx={{ bgcolor: '#ede7f6', color: '#4527a0', fontWeight: 600 }}
+                                    />
+                                  </Tooltip>
+                                );
+                              }
+                              return <Chip size="small" variant="outlined" label="Series ended" />;
+                            }
+                            if (dayjs().isBefore(dayjs(r.startsAt))) {
+                              return <Chip size="small" label="Scheduled" />;
+                            }
+                            return <Chip size="small" variant="outlined" label="Past" />;
+                          })()}
                         </TableCell>
                         <TableCell>{r.createdByName || '—'}</TableCell>
                         <TableCell align="right">

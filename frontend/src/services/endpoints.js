@@ -100,7 +100,10 @@ export const settingsApi = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }).then((r) => r.data);
   },
-  logoUrl: () => `/api/settings/logo?ts=${Date.now()}`,
+  // Stable URL — the backend now returns a cacheable response so the login
+  // page doesn't re-request the logo on every render. Callers that just
+  // uploaded a new logo can pass a version key (e.g. `Date.now()`) to bust.
+  logoUrl: (v) => (v ? `/api/settings/logo?v=${v}` : '/api/settings/logo'),
 };
 
 export const billingApi = {

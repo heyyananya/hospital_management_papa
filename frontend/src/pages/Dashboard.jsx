@@ -149,6 +149,56 @@ export default function Dashboard() {
       .finally(() => setLoading(false));
   }, [notify]);
 
+  const hourGreeting = () => {
+    const h = new Date().getHours();
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  };
+  const doctorName = user?.fullName || 'Doctor';
+  const todayCount = Number(data?.todayTotal || 0);
+
+  // Colour-code the day's patient count for a quick temperature-check:
+  //   ≤ 10   → green   (light day, all clear)
+  //   11-20  → amber   (busier, "keep it up")
+  //   21+    → red     (heavy load, brace for it)
+  const loadTier = todayCount <= 10 ? 'low' : todayCount <= 20 ? 'medium' : 'high';
+  const LOAD = {
+    low: {
+      gradient:  'linear-gradient(120deg, #0b7a4a, #1e8f5c)',
+      bg:        'linear-gradient(120deg, #ffffff 0%, #edfaf3 55%, #dff5e6 100%)',
+      border:    'rgba(11,122,74,0.20)',
+      bloom:     'rgba(11,122,74,0.22)',
+      shadow:    '0 20px 50px -30px rgba(11,122,74,0.45)',
+      chipBg:    '#e6f4ea',
+      chipColor: '#0b6d3a',
+      badge:     'Light day — all clear',
+      message:   'Have a smooth day ahead.',
+    },
+    medium: {
+      gradient:  'linear-gradient(120deg, #a15c00, #d97706)',
+      bg:        'linear-gradient(120deg, #ffffff 0%, #fff8ec 55%, #fff0d1 100%)',
+      border:    'rgba(217,119,6,0.22)',
+      bloom:     'rgba(217,119,6,0.22)',
+      shadow:    '0 20px 50px -30px rgba(217,119,6,0.45)',
+      chipBg:    '#fff3d6',
+      chipColor: '#92400e',
+      badge:     'Busy day — keep it up!',
+      message:   'A solid day of work — you\'ve got this.',
+    },
+    high: {
+      gradient:  'linear-gradient(120deg, #b71c1c, #e53935)',
+      bg:        'linear-gradient(120deg, #ffffff 0%, #fff2f2 55%, #ffe0e0 100%)',
+      border:    'rgba(211,47,47,0.22)',
+      bloom:     'rgba(211,47,47,0.22)',
+      shadow:    '0 20px 50px -30px rgba(211,47,47,0.45)',
+      chipBg:    '#fdecea',
+      chipColor: '#b71c1c',
+      badge:     'Heavy load — brace yourself',
+      message:   'A packed day today. Pace yourself and take breaks.',
+    },
+  }[loadTier];
+
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', mt: 8 }}>
@@ -163,6 +213,116 @@ export default function Dashboard() {
 
   return (
     <Box>
+      {/* ================================================================
+             Admin greeting card — permanent part of the dashboard.
+             Shows the day's registered-patient count front-and-centre so
+             the doctor knows the day's load the moment they land here.
+             Reception / MO don't see it (the smaller header below is
+             enough for them).
+         ================================================================ */}
+      {user?.role === 'ADMIN' && (
+        <Card sx={{
+          mb: 3, position: 'relative', overflow: 'hidden',
+          borderRadius: 4,
+          border: `1px solid ${LOAD.border}`,
+          background: LOAD.bg,
+          boxShadow: LOAD.shadow,
+          animation: `${fadeUp} 0.55s ease-out both`,
+        }}>
+          {/* Soft tier-tinted bloom on the right side — colour matches the
+              load tier so the whole card reads as a temperature indicator. */}
+          <Box sx={{
+            position: 'absolute', width: 380, height: 380,
+            right: -120, top: -120, borderRadius: '50%',
+            background: `radial-gradient(circle, ${LOAD.bloom}, transparent 65%)`,
+            filter: 'blur(30px)', pointerEvents: 'none',
+          }} />
+          <Box sx={{
+            position: 'absolute', width: 260, height: 260,
+            left: -80, bottom: -100, borderRadius: '50%',
+            background: `radial-gradient(circle, ${LOAD.bloom}, transparent 65%)`,
+            opacity: 0.6,
+            filter: 'blur(30px)', pointerEvents: 'none',
+          }} />
+          <CardContent sx={{ p: { xs: 2.5, sm: 3.5 }, position: 'relative' }}>
+            <Stack
+              direction={{ xs: 'column', md: 'row' }}
+              alignItems={{ xs: 'flex-start', md: 'center' }}
+              justifyContent="space-between"
+              spacing={2}
+            >
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="overline" sx={{
+                  letterSpacing: 2.5, color: 'text.secondary', fontWeight: 700,
+                }}>
+                  {new Date().toLocaleDateString('en-IN', {
+                    weekday: 'long', day: '2-digit', month: 'long', year: 'numeric',
+                  })}
+                </Typography>
+                <Typography sx={{
+                  mt: 0.25, fontSize: { xs: 22, sm: 28 }, fontWeight: 900,
+                  color: '#0b3d29', lineHeight: 1.15,
+                }}>
+                  {hourGreeting()}, {doctorName}
+                </Typography>
+
+                {/* Big animated number — today's registered patients. The
+                    gradient colour swaps by tier (green / amber / red). */}
+                <Stack direction="row" alignItems="baseline" spacing={1.25}
+                  sx={{ mt: 1.5, animation: `${fadeUp} 0.6s ease-out .1s both` }}>
+                  <Typography sx={{
+                    fontSize: { xs: 54, sm: 68 }, fontWeight: 900, lineHeight: 1,
+                    background: LOAD.gradient,
+                    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                    backgroundClip: 'text',
+                  }}>
+                    <CountUp to={todayCount} duration={900} />
+                  </Typography>
+                  <Typography sx={{
+                    fontSize: 18, color: 'text.secondary', fontWeight: 700,
+                  }}>
+                    patient{todayCount === 1 ? '' : 's'}
+                  </Typography>
+                </Stack>
+                <Typography sx={{ mt: 0.5, color: 'text.secondary', fontSize: 14 }}>
+                  {todayCount === 0
+                    ? 'No patients have registered yet today. Have a great day ahead.'
+                    : todayCount === 1
+                      ? 'has registered today.'
+                      : 'have registered today.'}
+                </Typography>
+              </Box>
+
+              {/* Load-tier badge — one glance tells the doctor the day's
+                  temperature. Colours + wording match the tier. */}
+              <Chip
+                label={LOAD.badge}
+                sx={{
+                  bgcolor: LOAD.chipBg,
+                  color: LOAD.chipColor,
+                  fontWeight: 800,
+                  letterSpacing: 0.4,
+                  height: 36,
+                  px: 1.5,
+                  fontSize: 13,
+                  border: `1px solid ${LOAD.border}`,
+                  animation: `${fadeUp} 0.6s ease-out .2s both`,
+                }}
+              />
+            </Stack>
+
+            {/* Second-line reassurance / warning that also swaps by tier. */}
+            <Typography sx={{
+              mt: 1.5, color: LOAD.chipColor, fontWeight: 600, fontSize: 13,
+              opacity: 0.9,
+              animation: `${fadeUp} 0.6s ease-out .3s both`,
+            }}>
+              {LOAD.message}
+            </Typography>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ------ Page header ------ */}
       <Box
         sx={{
@@ -405,6 +565,7 @@ export default function Dashboard() {
           </Card>
         </Grid>
       </Grid>
+
     </Box>
   );
 }

@@ -80,10 +80,10 @@ export const AuthProvider = ({ children }) => {
     navigate('/login', { replace: true });
   };
 
-  // Automatic logout after 15 minutes of inactivity (no mouse, keyboard, or touch events)
+  // Automatic logout after 7 minutes of inactivity (no mouse, keyboard, or touch events)
   useEffect(() => {
     if (!user) return;
-    const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+    const IDLE_TIMEOUT_MS = 7 * 60 * 1000; // 7 minutes
     let timer;
 
     const resetTimer = () => {

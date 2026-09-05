@@ -6,12 +6,15 @@
 const { Pool } = require('pg');
 const env = require('./env');
 
+const isLocal = env.PG.host === 'localhost' || env.PG.host === '127.0.0.1';
+
 const pool = new Pool({
   host: env.PG.host,
   port: env.PG.port,
   user: env.PG.user,
   password: env.PG.password,
   database: env.PG.database,
+  ssl: isLocal ? false : { rejectUnauthorized: false },
   max: 20,
   idleTimeoutMillis: 30_000,
   connectionTimeoutMillis: 5_000,

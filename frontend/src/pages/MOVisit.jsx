@@ -63,7 +63,38 @@ export default function MOVisit() {
   const [selectedDiseases, setSelectedDiseases] = useState([]);
   const [complaints, setComplaints] = useState([blankComplaint()]);
   const [submitting, setSubmitting] = useState(false);
-  const { register, handleSubmit, reset } = useForm();
+  const { register, handleSubmit, reset, watch } = useForm();
+  const formValues = watch();
+
+  // 5-second auto-save draft for Medical Officer
+  useEffect(() => {
+    if (!visitId) return;
+    const timer = setInterval(() => {
+      try {
+        const payload = {
+          vitals: formValues,
+          diseases: selectedDiseases,
+          complaints,
+        };
+        sessionStorage.setItem(`dcms.draft.mo_visit_${visitId}`, JSON.stringify(payload));
+      } catch (_e) { /* ignore */ }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [visitId, formValues, selectedDiseases, complaints]);
+
+  // Restore draft on mount if present
+  useEffect(() => {
+    if (!visitId) return;
+    try {
+      const saved = sessionStorage.getItem(`dcms.draft.mo_visit_${visitId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.vitals) reset(parsed.vitals);
+        if (parsed?.diseases?.length) setSelectedDiseases(parsed.diseases);
+        if (parsed?.complaints?.length) setComplaints(parsed.complaints);
+      }
+    } catch (_e) { /* ignore */ }
+  }, [visitId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     (async () => {

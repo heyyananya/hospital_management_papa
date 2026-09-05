@@ -39,10 +39,15 @@ const readUser = () => {
   catch { return null; }
 };
 
+import LockOverlay from '../components/LockOverlay.jsx';
+
+const LOCKED_KEY = 'dcms.isLocked';
+
 export const AuthProvider = ({ children }) => {
   const navigate = useNavigate();
   const [user, setUser] = useState(() => readUser());
   const [booting, setBooting] = useState(true);
+  const [isLocked, setIsLocked] = useState(() => STORE.getItem(LOCKED_KEY) === 'true');
 
   // On first mount, verify the stored token is still valid.
   useEffect(() => {
@@ -56,7 +61,9 @@ export const AuthProvider = ({ children }) => {
       .catch(() => {
         STORE.removeItem(TOKEN_KEY);
         STORE.removeItem(USER_KEY);
+        STORE.removeItem(LOCKED_KEY);
         setUser(null);
+        setIsLocked(false);
       })
       .finally(() => setBooting(false));
   }, []);
@@ -65,7 +72,9 @@ export const AuthProvider = ({ children }) => {
     const { token, user: u } = await authApi.login({ username, password });
     STORE.setItem(TOKEN_KEY, token);
     STORE.setItem(USER_KEY, JSON.stringify(u));
+    STORE.removeItem(LOCKED_KEY);
     setUser(u);
+    setIsLocked(false);
     return u;
   };
 
@@ -73,23 +82,31 @@ export const AuthProvider = ({ children }) => {
     try { await authApi.logout(); } catch (_e) { /* ignore */ }
     STORE.removeItem(TOKEN_KEY);
     STORE.removeItem(USER_KEY);
+    STORE.removeItem(LOCKED_KEY);
     // Also clear any residual localStorage from prior installs.
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
     setUser(null);
+    setIsLocked(false);
     navigate('/login', { replace: true });
   };
 
-  // Automatic logout after 7 minutes of inactivity (no mouse, keyboard, or touch events)
+  const unlockSession = () => {
+    STORE.removeItem(LOCKED_KEY);
+    setIsLocked(false);
+  };
+
+  // Screen Lock after 7 minutes of inactivity (no mouse, keyboard, or touch events)
   useEffect(() => {
-    if (!user) return;
+    if (!user || isLocked) return;
     const IDLE_TIMEOUT_MS = 7 * 60 * 1000; // 7 minutes
     let timer;
 
     const resetTimer = () => {
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        logout();
+        STORE.setItem(LOCKED_KEY, 'true');
+        setIsLocked(true);
       }, IDLE_TIMEOUT_MS);
     };
 
@@ -101,11 +118,25 @@ export const AuthProvider = ({ children }) => {
       if (timer) clearTimeout(timer);
       events.forEach((ev) => window.removeEventListener(ev, resetTimer));
     };
-  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, isLocked]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const value = useMemo(() => ({ user, login, logout, booting }), [user, booting]);
+  const value = useMemo(
+    () => ({ user, login, logout, booting, isLocked, unlockSession }),
+    [user, booting, isLocked]
+  );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>
+      {children}
+      {user && isLocked && (
+        <LockOverlay
+          user={user}
+          onUnlock={unlockSession}
+          onLogout={logout}
+        />
+      )}
+    </AuthContext.Provider>
+  );
 };
 
 export const useAuth = () => useContext(AuthContext);

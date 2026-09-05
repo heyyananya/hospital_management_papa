@@ -192,7 +192,44 @@ export default function DoctorVisit() {
   const [followupAuto, setFollowupAuto] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
-  const { register, handleSubmit, reset } = useForm();
+  const { register, handleSubmit, reset, watch } = useForm();
+  const formValues = watch();
+
+  // 5-second auto-save draft for Doctor consultation
+  useEffect(() => {
+    if (!visitId) return;
+    const timer = setInterval(() => {
+      try {
+        const payload = {
+          examination,
+          investigation,
+          plan,
+          medicines,
+          advices,
+          notes: formValues,
+        };
+        sessionStorage.setItem(`dcms.draft.doctor_visit_${visitId}`, JSON.stringify(payload));
+      } catch (_e) { /* ignore */ }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [visitId, examination, investigation, plan, medicines, advices, formValues]);
+
+  // Restore draft on mount if present
+  useEffect(() => {
+    if (!visitId) return;
+    try {
+      const saved = sessionStorage.getItem(`dcms.draft.doctor_visit_${visitId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.examination) setExamination(parsed.examination);
+        if (parsed?.investigation) setInvestigation(parsed.investigation);
+        if (parsed?.plan) setPlan(parsed.plan);
+        if (parsed?.medicines?.length) setMedicines(parsed.medicines);
+        if (parsed?.advices) setAdvices(parsed.advices);
+        if (parsed?.notes) reset(parsed.notes);
+      }
+    } catch (_e) { /* ignore */ }
+  }, [visitId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const load = async () => {
     try {

@@ -452,6 +452,30 @@ function NewCaseForm({ notify, navigate }) {
   // clears MUI's internal Autocomplete input which reset() alone can't touch.
   const [formKey, setFormKey] = useState(0);
   const stateValue = watch('state');
+  const formValues = watch();
+
+  // 5-second auto-save draft
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (formValues && (formValues.firstName || formValues.surname || formValues.mobile)) {
+        try {
+          sessionStorage.setItem('dcms.draft.patient_register', JSON.stringify(formValues));
+        } catch (_e) { /* ignore */ }
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [formValues]);
+
+  // Restore draft on initial load
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem('dcms.draft.patient_register');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed) reset(parsed);
+      }
+    } catch (_e) { /* ignore */ }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load master data once for the dropdowns.
   useEffect(() => {
@@ -487,6 +511,7 @@ function NewCaseForm({ notify, navigate }) {
         'success'
       );
       // Stay on the Register Patient page — clear every field for the next patient.
+      sessionStorage.removeItem('dcms.draft.patient_register');
       reset({ state: 'Gujarat' });
       setBillCaseType('NEW');
       setFormKey((k) => k + 1);     // force-remount so MUI Autocomplete text clears too

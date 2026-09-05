@@ -96,10 +96,10 @@ export const AuthProvider = ({ children }) => {
     setIsLocked(false);
   };
 
-  // Screen Lock after 7 minutes of inactivity (no mouse, keyboard, or touch events)
+  // Screen Lock after 5 minutes of inactivity (no mouse, keyboard, or touch events)
   useEffect(() => {
     if (!user || isLocked) return;
-    const IDLE_TIMEOUT_MS = 7 * 60 * 1000; // 7 minutes
+    const IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
     let timer;
 
     const resetTimer = () => {

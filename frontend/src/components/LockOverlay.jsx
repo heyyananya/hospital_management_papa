@@ -11,7 +11,11 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import { authApi } from '../services/endpoints.js';
 
 export default function LockOverlay({ user, onUnlock, onLogout }) {
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
   const handleUnlock = async (e) => {
     e.preventDefault();
@@ -45,7 +49,7 @@ export default function LockOverlay({ user, onUnlock, onLogout }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        bgcolor: 'rgba(11, 24, 38, 0.82)',
+        bgcolor: 'rgba(11, 24, 38, 0.85)',
         backdropFilter: 'blur(16px)',
         p: 2,
         animation: 'fadeIn 0.3s ease-out',
@@ -59,7 +63,7 @@ export default function LockOverlay({ user, onUnlock, onLogout }) {
           borderRadius: 4,
           overflow: 'hidden',
           boxShadow: '0 24px 48px rgba(0,0,0,0.4)',
-          border: '1px solid rgba(255,255,255,0.12)',
+          border: '1px solid rgba(255,255,255,0.15)',
           bgcolor: '#ffffff',
         }}
       >
@@ -116,7 +120,7 @@ export default function LockOverlay({ user, onUnlock, onLogout }) {
                 </Typography>
               </Stack>
               <Typography variant="body2" color="text.secondary">
-                Locked due to 7 minutes of inactivity. Enter your password to resume where you left off.
+                Locked due to 5 minutes of inactivity. Enter your password to resume where you left off.
               </Typography>
             </Box>
 

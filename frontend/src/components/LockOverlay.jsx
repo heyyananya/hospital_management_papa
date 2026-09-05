@@ -11,25 +11,26 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import { authApi } from '../services/endpoints.js';
 
 export default function LockOverlay({ user, onUnlock, onLogout }) {
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   const handleUnlock = async (e) => {
     e.preventDefault();
     if (!password) {
-      setError('Please enter your password');
+      setError('Invalid Password. Please enter your password.');
       return;
     }
     setError('');
+    setSuccess(false);
     setSubmitting(true);
     try {
       // Re-verify password against authentication API
       await authApi.login({ username: user.username, password });
-      onUnlock();
+      setSuccess(true);
+      setTimeout(() => {
+        onUnlock();
+      }, 700);
     } catch (err) {
-      setError(err?.response?.data?.message || 'Incorrect password. Please try again.');
+      setError('Invalid Password. Please try again.');
     } finally {
       setSubmitting(false);
     }
@@ -122,6 +123,12 @@ export default function LockOverlay({ user, onUnlock, onLogout }) {
             {error && (
               <Alert severity="error" variant="filled" sx={{ borderRadius: 2, fontWeight: 600 }}>
                 {error}
+              </Alert>
+            )}
+
+            {success && (
+              <Alert severity="success" variant="filled" sx={{ borderRadius: 2, fontWeight: 700, bgcolor: '#0b7a4a' }}>
+                Successfully Logged In! Resuming session...
               </Alert>
             )}
 

@@ -2,11 +2,11 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://dcms-backend.onrender.com/api/$1"
+      "destination": "https://dcms-backend-574b.onrender.com/api/$1"
     },
     {
       "source": "/uploads/(.*)",
-      "destination": "https://dcms-backend.onrender.com/uploads/$1"
+      "destination": "https://dcms-backend-574b.onrender.com/uploads/$1"
     },
     {
       "source": "/(.*)",

@@ -102,6 +102,24 @@ CREATE TABLE IF NOT EXISTS investigation_master (
   is_active BOOLEAN      NOT NULL DEFAULT TRUE
 );
 
+-- Catalogue of drugs the doctor can pick from in the Prescription panel.
+-- `form` lets the UI hint at the unit ("Tablet", "Syrup", "Inhaler", ...).
+CREATE TABLE IF NOT EXISTS medicine_master (
+  id        SERIAL PRIMARY KEY,
+  code      VARCHAR(40)  UNIQUE NOT NULL,
+  name      VARCHAR(160) NOT NULL,
+  form      VARCHAR(40),
+  is_active BOOLEAN      NOT NULL DEFAULT TRUE
+);
+
+-- Treatment plan options the doctor can pick from in the Plan panel.
+CREATE TABLE IF NOT EXISTS plan_master (
+  id        SERIAL PRIMARY KEY,
+  code      VARCHAR(40)  UNIQUE NOT NULL,
+  name      VARCHAR(120) NOT NULL,
+  is_active BOOLEAN      NOT NULL DEFAULT TRUE
+);
+
 -- Disease-medicine templates: for each known disease the admin can
 -- configure the "usual" 4–5 medicines the doctor prescribes. When the
 -- doctor picks the disease during a visit, these rows are copied into
@@ -121,24 +139,6 @@ CREATE TABLE IF NOT EXISTS disease_medicine_templates (
 );
 CREATE INDEX IF NOT EXISTS idx_dmt_disease
   ON disease_medicine_templates (disease_id, position);
-
--- Treatment plan options the doctor can pick from in the Plan panel.
-CREATE TABLE IF NOT EXISTS plan_master (
-  id        SERIAL PRIMARY KEY,
-  code      VARCHAR(40)  UNIQUE NOT NULL,
-  name      VARCHAR(120) NOT NULL,
-  is_active BOOLEAN      NOT NULL DEFAULT TRUE
-);
-
--- Catalogue of drugs the doctor can pick from in the Prescription panel.
--- `form` lets the UI hint at the unit ("Tablet", "Syrup", "Inhaler", ...).
-CREATE TABLE IF NOT EXISTS medicine_master (
-  id        SERIAL PRIMARY KEY,
-  code      VARCHAR(40)  UNIQUE NOT NULL,
-  name      VARCHAR(160) NOT NULL,
-  form      VARCHAR(40),
-  is_active BOOLEAN      NOT NULL DEFAULT TRUE
-);
 
 -- ---------------------------------------------------------------------
 -- APP SETTINGS (clinic name, doctor name, etc.)
@@ -422,6 +422,79 @@ CREATE TABLE IF NOT EXISTS three_c_amount_overrides (
 -- 3C Register IPD — manual ledger of admitted-and-discharged patients.
 --
 -- Two counters run in parallel:
+-- ---------------------------------------------------------------------
+-- INDOOR PATIENT DEPARTMENT (IPD)
+-- ---------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS wards (
+  id         SERIAL PRIMARY KEY,
+  name       VARCHAR(80) UNIQUE NOT NULL,
+  floor      VARCHAR(40),
+  -- FALSE = shared ward (multiple beds in one room, e.g. General Room)
+  -- TRUE  = each bed is a private room (e.g. Special Room, IRCU)
+  is_private BOOLEAN     NOT NULL DEFAULT FALSE,
+  is_active  BOOLEAN     NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+ALTER TABLE wards ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE TABLE IF NOT EXISTS beds (
+  id         SERIAL PRIMARY KEY,
+  ward_id    INTEGER NOT NULL REFERENCES wards(id) ON DELETE CASCADE,
+  bed_number VARCHAR(40) NOT NULL,
+  bed_type   VARCHAR(40) NOT NULL DEFAULT 'General',   -- free-form (General / Special / IRCU / …)
+  status     VARCHAR(20)   NOT NULL DEFAULT 'FREE'
+             CHECK (status IN ('FREE', 'OCCUPIED', 'UNDER_MAINTENANCE')),
+  is_active  BOOLEAN       NOT NULL DEFAULT TRUE,
+  created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  UNIQUE (ward_id, bed_number)
+);
+-- Legacy: drop the daily_rate column from existing installs. Beds no longer
+-- carry a per-day price; billing lives on the bill entity.
+ALTER TABLE beds DROP COLUMN IF EXISTS daily_rate;
+CREATE INDEX IF NOT EXISTS idx_beds_ward   ON beds (ward_id);
+CREATE INDEX IF NOT EXISTS idx_beds_status ON beds (status);
+
+CREATE TABLE IF NOT EXISTS admissions (
+  id                   SERIAL PRIMARY KEY,
+  admission_number     INTEGER      NOT NULL,     -- resets each FY
+  fy_key               VARCHAR(7)   NOT NULL,
+  patient_id           INTEGER NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
+  source_visit_id      INTEGER REFERENCES patient_visits(id) ON DELETE SET NULL,
+  bed_id               INTEGER REFERENCES beds(id) ON DELETE SET NULL,
+  admitting_doctor_id  INTEGER REFERENCES users(id),
+  admission_diagnosis  TEXT,
+  status               VARCHAR(20)  NOT NULL DEFAULT 'REQUESTED'
+                       CHECK (status IN ('REQUESTED','ADMITTED','DISCHARGED','CANCELLED')),
+  admitted_at          TIMESTAMPTZ,
+  discharged_at        TIMESTAMPTZ,
+  discharge_notes      TEXT,
+  created_by           INTEGER REFERENCES users(id),
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (fy_key, admission_number)
+);
+CREATE INDEX IF NOT EXISTS idx_admissions_status  ON admissions (status);
+CREATE INDEX IF NOT EXISTS idx_admissions_patient ON admissions (patient_id);
+CREATE INDEX IF NOT EXISTS idx_admissions_bed     ON admissions (bed_id);
+
+-- Wire the bills → admissions FK now that both tables exist. Defined here
+-- (rather than inline in the bills CREATE TABLE) because bills is declared
+-- earlier in this file.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'bills_admission_id_fkey'
+  ) THEN
+    ALTER TABLE bills
+      ADD CONSTRAINT bills_admission_id_fkey
+      FOREIGN KEY (admission_id) REFERENCES admissions(id) ON DELETE CASCADE;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 3C Register IPD — manual ledger of admitted-and-discharged patients.
+--
+-- Two counters run in parallel:
 --   - reg_seq          : 1, 2, 3 … within each calendar month, formatted
 --                        for display as NN/MM-YY  (e.g. 01/05-26)
 --   - receipt_number   : 1, 2, 3 … within each Financial Year (fy_key).
@@ -515,75 +588,6 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 CREATE INDEX IF NOT EXISTS idx_audit_user    ON audit_logs (user_id);
 CREATE INDEX IF NOT EXISTS idx_audit_entity  ON audit_logs (entity, entity_id);
 CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_logs (created_at DESC);
-
--- ---------------------------------------------------------------------
--- INDOOR PATIENT DEPARTMENT (IPD)
--- ---------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS wards (
-  id         SERIAL PRIMARY KEY,
-  name       VARCHAR(80) UNIQUE NOT NULL,
-  floor      VARCHAR(40),
-  -- FALSE = shared ward (multiple beds in one room, e.g. General Room)
-  -- TRUE  = each bed is a private room (e.g. Special Room, IRCU)
-  is_private BOOLEAN     NOT NULL DEFAULT FALSE,
-  is_active  BOOLEAN     NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-ALTER TABLE wards ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT FALSE;
-
-CREATE TABLE IF NOT EXISTS beds (
-  id         SERIAL PRIMARY KEY,
-  ward_id    INTEGER NOT NULL REFERENCES wards(id) ON DELETE CASCADE,
-  bed_number VARCHAR(40) NOT NULL,
-  bed_type   VARCHAR(40) NOT NULL DEFAULT 'General',   -- free-form (General / Special / IRCU / …)
-  status     VARCHAR(20)   NOT NULL DEFAULT 'FREE'
-             CHECK (status IN ('FREE', 'OCCUPIED', 'UNDER_MAINTENANCE')),
-  is_active  BOOLEAN       NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-  UNIQUE (ward_id, bed_number)
-);
--- Legacy: drop the daily_rate column from existing installs. Beds no longer
--- carry a per-day price; billing lives on the bill entity.
-ALTER TABLE beds DROP COLUMN IF EXISTS daily_rate;
-CREATE INDEX IF NOT EXISTS idx_beds_ward   ON beds (ward_id);
-CREATE INDEX IF NOT EXISTS idx_beds_status ON beds (status);
-
-CREATE TABLE IF NOT EXISTS admissions (
-  id                   SERIAL PRIMARY KEY,
-  admission_number     INTEGER      NOT NULL,     -- resets each FY
-  fy_key               VARCHAR(7)   NOT NULL,
-  patient_id           INTEGER NOT NULL REFERENCES patients(id) ON DELETE RESTRICT,
-  source_visit_id      INTEGER REFERENCES patient_visits(id) ON DELETE SET NULL,
-  bed_id               INTEGER REFERENCES beds(id) ON DELETE SET NULL,
-  admitting_doctor_id  INTEGER REFERENCES users(id),
-  admission_diagnosis  TEXT,
-  status               VARCHAR(20)  NOT NULL DEFAULT 'REQUESTED'
-                       CHECK (status IN ('REQUESTED','ADMITTED','DISCHARGED','CANCELLED')),
-  admitted_at          TIMESTAMPTZ,
-  discharged_at        TIMESTAMPTZ,
-  discharge_notes      TEXT,
-  created_by           INTEGER REFERENCES users(id),
-  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (fy_key, admission_number)
-);
-CREATE INDEX IF NOT EXISTS idx_admissions_status  ON admissions (status);
-CREATE INDEX IF NOT EXISTS idx_admissions_patient ON admissions (patient_id);
-CREATE INDEX IF NOT EXISTS idx_admissions_bed     ON admissions (bed_id);
-
--- Wire the bills → admissions FK now that both tables exist. Defined here
--- (rather than inline in the bills CREATE TABLE) because bills is declared
--- earlier in this file.
-DO $$
-BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'bills_admission_id_fkey'
-  ) THEN
-    ALTER TABLE bills
-      ADD CONSTRAINT bills_admission_id_fkey
-      FOREIGN KEY (admission_id) REFERENCES admissions(id) ON DELETE CASCADE;
-  END IF;
-END $$;
 
 -- ---------------------------------------------------------------------
 -- REMINDERS — admin notes that pop up at login and live in the bell menu

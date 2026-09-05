@@ -13,6 +13,15 @@ const env = require('../config/env');
 const dbName = env.PG.database;
 
 (async () => {
+  const isLocal = env.PG.host === 'localhost' || env.PG.host === '127.0.0.1';
+  const isCloud = !isLocal;
+
+  // On cloud databases like Neon, the target database already exists.
+  if (isCloud) {
+    console.log(`[createDb] Cloud database detected (${env.PG.host}) - skipping database creation.`);
+    return;
+  }
+
   // Connect to the built-in `postgres` database to be able to issue CREATE DATABASE.
   const admin = new Client({
     host: env.PG.host,
@@ -20,6 +29,7 @@ const dbName = env.PG.database;
     user: env.PG.user,
     password: env.PG.password,
     database: 'postgres',
+    ssl: isLocal ? false : { rejectUnauthorized: false },
   });
 
   try {

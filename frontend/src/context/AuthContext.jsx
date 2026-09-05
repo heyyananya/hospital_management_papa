@@ -80,6 +80,29 @@ export const AuthProvider = ({ children }) => {
     navigate('/login', { replace: true });
   };
 
+  // Automatic logout after 15 minutes of inactivity (no mouse, keyboard, or touch events)
+  useEffect(() => {
+    if (!user) return;
+    const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+    let timer;
+
+    const resetTimer = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        logout();
+      }, IDLE_TIMEOUT_MS);
+    };
+
+    const events = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+    events.forEach((ev) => window.addEventListener(ev, resetTimer));
+    resetTimer();
+
+    return () => {
+      if (timer) clearTimeout(timer);
+      events.forEach((ev) => window.removeEventListener(ev, resetTimer));
+    };
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const value = useMemo(() => ({ user, login, logout, booting }), [user, booting]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

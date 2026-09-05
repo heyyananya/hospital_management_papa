@@ -20,10 +20,11 @@ const ensurePermissions = async () => {
 
 const login = async ({ username, password }) => {
   await ensurePermissions();
+  const cleanUsername = (username || '').trim();
   const { rows } = await pool.query(
     `SELECT id, username, password_hash, full_name, role, is_active, permissions
-       FROM users WHERE username = $1`,
-    [username]
+       FROM users WHERE LOWER(username) = LOWER($1)`,
+    [cleanUsername]
   );
   const user = rows[0];
   if (!user || !user.is_active) throw new HttpError(401, 'Invalid credentials');

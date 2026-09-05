@@ -266,6 +266,39 @@ function RevealText({ text, sx }) {
   );
 }
 
+/* ------------- Doctor 3D Character (Standing in bottom-right corner) -------------- */
+function DoctorStandingFigure() {
+  return (
+    <Box
+      sx={{
+        position: 'absolute',
+        right: { xs: -45, sm: -35, md: -20, lg: 5, xl: 35 },
+        bottom: 0,
+        width: { xs: 150, sm: 200, md: 250, lg: 295, xl: 345 },
+        height: { xs: 220, sm: 290, md: 360, lg: 430, xl: 500 },
+        pointerEvents: 'none',
+        zIndex: 1,
+        display: { xs: 'none', md: 'flex' },
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end',
+      }}
+    >
+      <Box
+        component="img"
+        src="/doctor-image.png"
+        alt="Dr. Ajit"
+        sx={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          objectPosition: 'bottom right',
+          filter: 'drop-shadow(0 15px 30px rgba(11, 122, 74, 0.18)) drop-shadow(0 4px 12px rgba(0, 0, 0, 0.08))',
+        }}
+      />
+    </Box>
+  );
+}
+
 /* ------------- drifting sparkles (decorative, pure CSS) -------------- */
 const SPARKLES = Array.from({ length: 22 }, (_, i) => ({
   left: `${(i * 47) % 100}%`,
@@ -274,6 +307,33 @@ const SPARKLES = Array.from({ length: 22 }, (_, i) => ({
   duration: 14 + (i % 6) * 2,
   opacity: 0.35 + ((i % 5) / 10),
 }));
+
+/* --------- Role-Based Welcome Messages & Quotes --------- */
+const getWelcomeMessage = (u) => {
+  const role = u?.role;
+  if (role === 'ADMIN') {
+    return {
+      title: 'Welcome, Dr. Ajit Patel',
+      quote: "Let's get back to work & heal lives today! 🩺",
+    };
+  }
+  if (role === 'RECEPTIONIST') {
+    return {
+      title: 'Welcome to the Reception Portal',
+      quote: 'Every great patient experience starts with your warm welcome! 📋',
+    };
+  }
+  if (role === 'MEDICAL_OFFICER') {
+    return {
+      title: 'Welcome to the Medical Officer Portal',
+      quote: 'Precision, compassion, and attentive care bring healing to life! 🩺',
+    };
+  }
+  return {
+    title: `Welcome, ${u?.fullName || u?.username || 'User'}`,
+    quote: 'Welcome back — taking you to your dashboard…',
+  };
+};
 
 /* ====================================================================
                               The page
@@ -284,6 +344,7 @@ export default function Login() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [showPwd, setShowPwd] = useState(false);
+  const [loggedInUser, setLoggedInUser] = useState(null);
   // Animation flags. `outcome` drives the celebratory / rejection overlay;
   // `shakeKey` bumps on each failed submit so the shake animation restarts
   // (re-setting the same value wouldn't retrigger the CSS animation).
@@ -316,13 +377,10 @@ export default function Login() {
     setOutcome(null);
     setSubmitting(true);
     try {
-      await login(data.username.trim(), data.password);
-      // Show the "Login Successful" panel for ~1.6s so the user clearly
-      // sees the confirmation before the dashboard swaps in. The auth
-      // state has already flipped — the guard in the early return keeps
-      // <Navigate> from firing prematurely.
+      const u = await login(data.username.trim(), data.password);
+      setLoggedInUser(u);
       setOutcome('success');
-      setTimeout(() => navigate('/', { replace: true }), 1600);
+      setTimeout(() => navigate('/', { replace: true }), 1900);
     } catch (e) {
       setError(e?.response?.data?.message || 'Login failed');
       setOutcome('error');
@@ -369,6 +427,7 @@ export default function Login() {
       <Box
         sx={{
           position: 'relative',
+          zIndex: 2,
           width: '100%',
           maxWidth: 1120,
           // Animated conic-gradient border that slowly rotates around the card.
@@ -686,19 +745,38 @@ export default function Login() {
                   />
                 </Box>
 
-                <Typography sx={{
-                  mt: 3, fontWeight: 900, fontSize: 26, color: '#0b7a4a',
-                  letterSpacing: 0.4,
-                  animation: `${fadeUp} 0.5s ease-out 0.35s both`,
-                }}>
-                  Login Successful
-                </Typography>
-                <Typography sx={{
-                  mt: 0.75, color: 'text.secondary', fontSize: 14,
-                  animation: `${fadeUp} 0.5s ease-out 0.55s both`,
-                }}>
-                  Welcome back — taking you to your dashboard…
-                </Typography>
+                {(() => {
+                  const welcome = getWelcomeMessage(loggedInUser || user);
+                  return (
+                    <>
+                      <Typography sx={{
+                        mt: 3,
+                        fontWeight: 900,
+                        fontSize: { xs: 22, sm: 25 },
+                        color: '#0b7a4a',
+                        letterSpacing: 0.3,
+                        textAlign: 'center',
+                        px: 2,
+                        animation: `${fadeUp} 0.5s ease-out 0.35s both`,
+                      }}>
+                        {welcome.title}
+                      </Typography>
+                      <Typography sx={{
+                        mt: 1,
+                        color: 'text.secondary',
+                        fontSize: { xs: 13.5, sm: 15 },
+                        textAlign: 'center',
+                        maxWidth: 380,
+                        px: 2,
+                        fontWeight: 500,
+                        lineHeight: 1.5,
+                        animation: `${fadeUp} 0.5s ease-out 0.55s both`,
+                      }}>
+                        {welcome.quote}
+                      </Typography>
+                    </>
+                  );
+                })()}
                 <Stack direction="row" spacing={1} alignItems="center" sx={{
                   mt: 1.5,
                   animation: `${fadeUp} 0.5s ease-out 0.75s both`,
@@ -989,6 +1067,9 @@ export default function Login() {
           </Box>
         </Paper>
       </Box>
+
+      {/* 3D Doctor Figure (Standing in Bottom-Right Corner) */}
+      <DoctorStandingFigure />
     </Box>
   );
 }

@@ -13,7 +13,8 @@
     "admin:reset": "node src/database/resetAdmin.js",
     "auth:check": "node src/database/authCheck.js",
     "bills:purge-final": "node src/database/purgeFinalBills.js",
-    "db:reset-transactions": "node src/database/resetTransactions.js"
+    "db:reset-transactions": "node src/database/resetTransactions.js",
+    "passwords:reset": "node src/database/updatePasswords.js"
   },
   "dependencies": {
     "@pdf-lib/fontkit": "^1.1.1",

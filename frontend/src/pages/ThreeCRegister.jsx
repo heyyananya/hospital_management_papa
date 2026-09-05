@@ -272,7 +272,7 @@ export default function ThreeCRegister() {
               src={settingsApi.logoUrl()}
               alt="Logo"
               sx={{ height: 64, width: 64, objectFit: 'contain', borderRadius: 1, bgcolor: '#fff' }}
-              onError={(e) => { e.target.style.visibility = 'hidden'; }}
+              onError={(e) => { e.target.src = '/logo.png'; }}
             />
             <Box sx={{ flex: 1, textAlign: 'center' }}>
               <Typography

@@ -351,7 +351,7 @@ export default function IndoorSheet() {
               src={settingsApi.logoUrl()}
               alt="Logo"
               sx={{ height: 64, width: 64, objectFit: 'contain', bgcolor: '#fff' }}
-              onError={(e) => { e.target.style.visibility = 'hidden'; }}
+              onError={(e) => { e.target.src = '/logo.png'; }}
             />
             <Box sx={{ flex: 1 }}>
               <Typography variant="h5"

@@ -596,9 +596,9 @@ export default function Login() {
                   // stuck the logo in display:none until a hard reload.
                   onError={(e) => {
                     const img = e.currentTarget;
-                    if (img.dataset.retried) { img.style.visibility = 'hidden'; return; }
+                    if (img.dataset.retried) return;
                     img.dataset.retried = '1';
-                    img.src = `/api/settings/logo?retry=${Date.now()}`;
+                    img.src = '/logo.png';
                   }}
                   sx={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
@@ -818,9 +818,9 @@ export default function Login() {
                   // stuck the logo in display:none until a hard reload.
                   onError={(e) => {
                     const img = e.currentTarget;
-                    if (img.dataset.retried) { img.style.visibility = 'hidden'; return; }
+                    if (img.dataset.retried) return;
                     img.dataset.retried = '1';
-                    img.src = `/api/settings/logo?retry=${Date.now()}`;
+                    img.src = '/logo.png';
                   }}
                   sx={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 />
